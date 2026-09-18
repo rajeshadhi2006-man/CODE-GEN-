@@ -223,6 +223,12 @@ export async function deleteTaskFromSupabase(id: string) {
   return await client.from('tasks').delete().eq('id', id);
 }
 
+export async function deleteAllTasksFromSupabase() {
+  const client = getSupabaseClient();
+  if (!client) throw new Error('Supabase client not configured');
+  return await client.from('tasks').delete().neq('id', 'placeholder_match_none');
+}
+
 export async function insertAuditLogToSupabase(log: Partial<AuditLog>) {
   const client = getSupabaseClient();
   if (!client) return;

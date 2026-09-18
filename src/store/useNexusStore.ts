@@ -25,6 +25,7 @@ import {
   insertTaskToSupabase,
   updateTaskInSupabase,
   deleteTaskFromSupabase,
+  deleteAllTasksFromSupabase,
   insertAuditLogToSupabase,
   updateRecommendationInSupabase,
   updateWeightsInSupabase
@@ -114,6 +115,7 @@ export interface NexusState {
   resendTaskEmail: (taskId: string) => Promise<boolean>;
   deleteEmployee: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
+  clearAllTasks: () => Promise<void>;
   clearAllData: () => Promise<void>;
   seedRealisticLiveBatch: () => Promise<void>;
 
@@ -830,6 +832,55 @@ export const useNexusStore = create<NexusState>((set, get) => ({
       await insertAuditLogToSupabase(audit);
     } catch (err) {
       console.warn('Supabase task delete notice:', err);
+    }
+  },
+
+  clearAllTasks: async () => {
+    const { employees, tasks, currentUser } = get();
+    
+    // Reset all employee workloads to 0
+    const updatedEmployees = employees.map(e => ({
+      ...e,
+      current_tasks: [],
+      utilization_pct: 0,
+      status: 'Available' as const
+    }));
+
+    const count = tasks.length;
+    const audit: AuditLog = {
+      id: `audit-clear-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${currentUser.role} (${currentUser.name})`,
+      event_type: 'MANUAL_OVERRIDE',
+      before: `${count} active work orders`,
+      after: '0 tasks (operational queue cleared)',
+      reason: 'Work order queue wiped to 0 by operator.',
+      approval_outcome: 'AUTO_APPROVED'
+    };
+
+    const newMetrics = computeMetrics([], updatedEmployees);
+    const updatedHistory = appendMetricHistory(newMetrics, updatedEmployees.length, 0, get().metricHistory);
+
+    set({
+      tasks: [],
+      employees: updatedEmployees,
+      recommendations: [],
+      metrics: newMetrics,
+      metricHistory: updatedHistory,
+      selectedTaskIdForExplain: null,
+      selectedRecommendationId: null,
+      auditLogs: [audit, ...get().auditLogs]
+    });
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `Operational task registry purged: 0 tasks remaining.`
+    });
+
+    try {
+      await deleteAllTasksFromSupabase();
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase clear all tasks notice:', err);
     }
   },
 

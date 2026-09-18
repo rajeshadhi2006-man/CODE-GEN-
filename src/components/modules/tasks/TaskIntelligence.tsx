@@ -28,13 +28,15 @@ export const TaskIntelligence: React.FC = () => {
     optimizeTask, 
     deleteTask, 
     assignTask, 
-    resendTaskEmail 
+    resendTaskEmail,
+    clearAllTasks
   } = useNexusStore();
   
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | TaskStatus>('All');
   const [page, setPage] = useState(1);
   const [taskToDelete, setTaskToDelete] = useState<{ id: string; code: string; name: string } | null>(null);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const [emailSendingTaskId, setEmailSendingTaskId] = useState<string | null>(null);
   const [testEmailStatus, setTestEmailStatus] = useState<string | null>(null);
   const [isTestingEmail, setIsTestingEmail] = useState(false);
@@ -94,6 +96,15 @@ export const TaskIntelligence: React.FC = () => {
               Global Work Order Registry
             </span>
             <Badge variant="neutral">{filteredTasks.length} Tasks Tracked</Badge>
+            {tasks.length > 0 && (
+              <button
+                onClick={() => setIsClearConfirmOpen(true)}
+                className="px-2 py-0.5 rounded text-[11px] font-semibold bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 transition-all flex items-center gap-1 active:scale-95"
+                title="Wipe all tasks to 0"
+              >
+                <Trash2 size={11} /> Clear All Tasks (Make 0)
+              </button>
+            )}
           </div>
           <h2 className="text-xl font-semibold text-[var(--text-primary)]">
             Task Intelligence & Lifecycle Pipeline
@@ -401,6 +412,52 @@ export const TaskIntelligence: React.FC = () => {
                 }}
               >
                 Confirm Delete
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Clear All Tasks Confirmation Modal */}
+      {isClearConfirmOpen && (
+        <Modal
+          isOpen={isClearConfirmOpen}
+          onClose={() => setIsClearConfirmOpen(false)}
+          title="Clear All Work Orders (Make 0 Tasks)"
+          subtitle="Permanently purge all tasks from the operational registry and Supabase"
+          maxWidth="sm"
+        >
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-semibold text-white">
+                  Are you sure you want to clear all {tasks.length} tasks?
+                </p>
+                <p className="text-slate-400 leading-relaxed">
+                  This will permanently delete all tasks from Supabase database, reset all employee utilizations to 0%, and bring active task count to exactly 0.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <Button
+                variant="bordered"
+                size="sm"
+                onClick={() => setIsClearConfirmOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                icon={<Trash2 size={13} />}
+                onClick={async () => {
+                  await clearAllTasks();
+                  setIsClearConfirmOpen(false);
+                }}
+              >
+                Yes, Clear All Tasks (Make 0)
               </Button>
             </div>
           </div>
