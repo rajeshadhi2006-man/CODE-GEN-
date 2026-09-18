@@ -107,4 +107,21 @@ describe('Scoring Engine', () => {
     expect(alternatives.length).toBe(1);
     expect(alternatives[0].employee_id).toBe('E-002');
   });
+
+  it('should safely score raw Supabase employees with missing current_tasks or skills without throwing', () => {
+    const rawSupabaseEmp = {
+      id: 'E-RAW',
+      name: 'Cloud Engineer',
+      title: 'Engineer',
+      email: 'eng@nexus.corp',
+      location: 'Remote',
+      region: 'Americas',
+      status: 'Available',
+      // current_tasks, skills, performance intentionally omitted or undefined
+    } as unknown as Employee;
+
+    expect(() => scoreSkillCompatibility(mockTask, rawSupabaseEmp)).not.toThrow();
+    const score = scoreSkillCompatibility(mockTask, rawSupabaseEmp);
+    expect(score).toBeGreaterThanOrEqual(0);
+  });
 });

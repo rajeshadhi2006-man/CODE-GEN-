@@ -62,9 +62,39 @@ export async function fetchAllDataFromSupabase(): Promise<{
     if (empRes.error) throw empRes.error;
     if (tasksRes.error) throw tasksRes.error;
 
+    const tasks = (tasksRes.data as Task[]) || [];
+
+    const employees: Employee[] = ((empRes.data as any[]) || []).map(emp => {
+      const activeTaskIds = tasks
+        .filter(t => t.assigned_employee_id === emp.id && t.status !== 'Completed')
+        .map(t => t.id);
+
+      const existingTasks = Array.isArray(emp.current_tasks) ? emp.current_tasks : [];
+      const mergedTasks = Array.from(new Set([...existingTasks, ...activeTaskIds]));
+
+      return {
+        ...emp,
+        name: emp.name || 'Specialist',
+        title: emp.title || 'Specialist Engineer',
+        email: emp.email || '',
+        location: emp.location || 'HQ',
+        region: emp.region || 'Americas',
+        timezone: emp.timezone || 'UTC+0',
+        skills: Array.isArray(emp.skills) ? emp.skills : [],
+        performance: emp.performance || { quality: 85, on_time: 90, tasks_completed_30d: 0 },
+        capacity_hours: Number(emp.capacity_hours) || 40,
+        utilization_pct: Number(emp.utilization_pct) || 0,
+        status: emp.status || 'Available',
+        current_tasks: mergedTasks,
+        shift: emp.shift || { start: '09:00', end: '18:00' },
+        certifications: Array.isArray(emp.certifications) ? emp.certifications : [],
+        avatar: emp.avatar || ''
+      };
+    });
+
     return {
-      employees: (empRes.data as Employee[]) || [],
-      tasks: (tasksRes.data as Task[]) || [],
+      employees,
+      tasks,
       projects: (projRes.data as Project[]) || [],
       auditLogs: (auditRes.data as AuditLog[]) || [],
       recommendations: (recRes.data as AIRecommendation[]) || [],

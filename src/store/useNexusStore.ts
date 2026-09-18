@@ -412,9 +412,21 @@ export const useNexusStore = create<NexusState>((set, get) => ({
           let updatedEmps = employees;
 
           if (eventType === 'INSERT') {
-            updatedEmps = [newRecord, ...employees.filter(e => e.id !== newRecord.id)];
+            const normalized: Employee = {
+              ...newRecord,
+              current_tasks: Array.isArray(newRecord.current_tasks) ? newRecord.current_tasks : [],
+              skills: Array.isArray(newRecord.skills) ? newRecord.skills : [],
+              capacity_hours: Number(newRecord.capacity_hours) || 40,
+              utilization_pct: Number(newRecord.utilization_pct) || 0
+            };
+            updatedEmps = [normalized, ...employees.filter(e => e.id !== newRecord.id)];
           } else if (eventType === 'UPDATE') {
-            updatedEmps = employees.map(e => e.id === newRecord.id ? newRecord : e);
+            updatedEmps = employees.map(e => e.id === newRecord.id ? {
+              ...e,
+              ...newRecord,
+              current_tasks: Array.isArray(newRecord.current_tasks) ? newRecord.current_tasks : (Array.isArray(e.current_tasks) ? e.current_tasks : []),
+              skills: Array.isArray(newRecord.skills) ? newRecord.skills : (Array.isArray(e.skills) ? e.skills : [])
+            } : e);
           } else if (eventType === 'DELETE') {
             updatedEmps = employees.filter(e => e.id !== oldRecord.id);
           }
@@ -635,12 +647,14 @@ export const useNexusStore = create<NexusState>((set, get) => ({
       const effortHours = (newTask.remaining_effort_min || 60) / 60;
       updatedEmployees = employees.map(e => {
         if (e.id === assignedEmpId) {
-          const cur = e.current_tasks.includes(newTask.id) ? e.current_tasks : [...e.current_tasks, newTask.id];
-          const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+          const prevTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+          const cur = prevTasks.includes(newTask.id) ? prevTasks : [...prevTasks, newTask.id];
+          const capHours = Number(e.capacity_hours) || 40;
+          const addUtil = Math.round((effortHours / Math.max(1, capHours)) * 100);
           return {
             ...e,
             current_tasks: cur,
-            utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+            utilization_pct: Math.min(100, (e.utilization_pct || 0) + addUtil)
           };
         }
         return e;
@@ -705,12 +719,14 @@ export const useNexusStore = create<NexusState>((set, get) => ({
 
       currentEmployees = currentEmployees.map(e => {
         if (e.id === emp.id) {
-          const cur = e.current_tasks.includes(task.id) ? e.current_tasks : [...e.current_tasks, task.id];
-          const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+          const prevTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+          const cur = prevTasks.includes(task.id) ? prevTasks : [...prevTasks, task.id];
+          const capHours = Number(e.capacity_hours) || 40;
+          const addUtil = Math.round((effortHours / Math.max(1, capHours)) * 100);
           return {
             ...e,
             current_tasks: cur,
-            utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+            utilization_pct: Math.min(100, (e.utilization_pct || 0) + addUtil)
           };
         }
         return e;
@@ -763,20 +779,24 @@ export const useNexusStore = create<NexusState>((set, get) => ({
     const effortHours = (targetTask.remaining_effort_min || 60) / 60;
     const updatedEmployees = employees.map(e => {
       if (e.id === employeeId) {
-        const cur = e.current_tasks.includes(taskId) ? e.current_tasks : [...e.current_tasks, taskId];
-        const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+        const prevTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+        const cur = prevTasks.includes(taskId) ? prevTasks : [...prevTasks, taskId];
+        const capHours = Number(e.capacity_hours) || 40;
+        const addUtil = Math.round((effortHours / Math.max(1, capHours)) * 100);
         return {
           ...e,
           current_tasks: cur,
-          utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+          utilization_pct: Math.min(100, (e.utilization_pct || 0) + addUtil)
         };
       }
       if (prevAssigneeId && e.id === prevAssigneeId) {
-        const subUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+        const prevTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+        const capHours = Number(e.capacity_hours) || 40;
+        const subUtil = Math.round((effortHours / Math.max(1, capHours)) * 100);
         return {
           ...e,
-          current_tasks: e.current_tasks.filter(tid => tid !== taskId),
-          utilization_pct: Math.max(0, e.utilization_pct - subUtil)
+          current_tasks: prevTasks.filter(tid => tid !== taskId),
+          utilization_pct: Math.max(0, (e.utilization_pct || 0) - subUtil)
         };
       }
       return e;
@@ -892,13 +912,15 @@ export const useNexusStore = create<NexusState>((set, get) => ({
     // Free up assigned employee capacity if task was assigned
     const updatedEmployees = employees.map(e => {
       if (e.id === targetTask.assigned_employee_id) {
-        const remainingTasks = e.current_tasks.filter(tid => tid !== id);
+        const empTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+        const remainingTasks = empTasks.filter(tid => tid !== id);
         const effortHours = targetTask.remaining_effort_min / 60;
-        const utilReduction = Math.round((effortHours / e.capacity_hours) * 100);
+        const capHours = Number(e.capacity_hours) || 40;
+        const utilReduction = Math.round((effortHours / Math.max(1, capHours)) * 100);
         return {
           ...e,
           current_tasks: remainingTasks,
-          utilization_pct: Math.max(0, e.utilization_pct - utilReduction)
+          utilization_pct: Math.max(0, (e.utilization_pct || 0) - utilReduction)
         };
       }
       return e;
@@ -1153,10 +1175,12 @@ export const useNexusStore = create<NexusState>((set, get) => ({
 
     const updatedEmployees = employees.map(e => {
       if (e.id === targetEmp.id) {
+        const prevTasks = Array.isArray(e.current_tasks) ? e.current_tasks : [];
+        const capHours = Number(e.capacity_hours) || 40;
         return {
           ...e,
-          utilization_pct: Math.min(100, e.utilization_pct + Math.round((task.remaining_effort_min / (e.capacity_hours * 60)) * 100)),
-          current_tasks: Array.from(new Set([...e.current_tasks, task.id]))
+          utilization_pct: Math.min(100, (e.utilization_pct || 0) + Math.round((task.remaining_effort_min / (capHours * 60)) * 100)),
+          current_tasks: Array.from(new Set([...prevTasks, task.id]))
         };
       }
       return e;

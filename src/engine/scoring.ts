@@ -37,31 +37,35 @@ export function validateWeights(weights: AllocationWeights): boolean {
  * Returns 0 - 100
  */
 export function scoreSkillCompatibility(task: Task, employee: Employee): number {
-  if (task.required_skills.length === 0) return 90;
+  const reqSkills = Array.isArray(task?.required_skills) ? task.required_skills : [];
+  if (reqSkills.length === 0) return 90;
   
   let totalScore = 0;
   let matches = 0;
+  const empSkills = Array.isArray(employee?.skills) ? employee.skills : [];
 
-  for (const req of task.required_skills) {
-    const empSkill = employee.skills.find(s => s.skill_id === req.skill_id);
+  for (const req of reqSkills) {
+    const empSkill = empSkills.find(s => s && s.skill_id === req.skill_id);
     if (!empSkill) {
       // Missing skill penalty
       totalScore += 10;
     } else {
       matches++;
-      if (empSkill.proficiency_pct >= req.min_proficiency) {
+      const prof = Number(empSkill.proficiency_pct) || 0;
+      const minProf = Number(req.min_proficiency) || 0;
+      if (prof >= minProf) {
         // Bonus for exceeding requirement
-        const bonus = Math.min(20, (empSkill.proficiency_pct - req.min_proficiency) * 0.5);
+        const bonus = Math.min(20, (prof - minProf) * 0.5);
         totalScore += Math.min(100, 80 + bonus);
       } else {
         // Partial proficiency
-        const ratio = empSkill.proficiency_pct / Math.max(1, req.min_proficiency);
+        const ratio = prof / Math.max(1, minProf);
         totalScore += Math.round(ratio * 70);
       }
     }
   }
 
-  const avg = totalScore / task.required_skills.length;
+  const avg = totalScore / reqSkills.length;
   // If no required skills matched at all, clamp low
   if (matches === 0) return Math.min(15, avg);
   return Math.min(100, Math.max(0, Math.round(avg)));
@@ -78,8 +82,9 @@ export function scoreSLAProtection(task: Task, employee: Employee, nowMs: number
   const remainingMinutes = (deadlineMs - nowMs) / (1000 * 60);
 
   // Speed factor based on employee on_time score
-  const speedFactor = 0.8 + (employee.performance.on_time / 100) * 0.4; // 0.8 to 1.2
-  const effectiveEffortMin = task.remaining_effort_min / speedFactor;
+  const onTime = Number(employee.performance?.on_time ?? 85);
+  const speedFactor = 0.8 + (onTime / 100) * 0.4; // 0.8 to 1.2
+  const effectiveEffortMin = (task.remaining_effort_min || 60) / speedFactor;
   const safetyBufferMin = remainingMinutes - effectiveEffortMin;
 
   if (safetyBufferMin < -30) return 5;
@@ -96,7 +101,7 @@ export function scoreAvailability(employee: Employee): number {
   if (employee.status === 'Unavailable') return 0;
   if (employee.status === 'OnLeave') return 5;
 
-  const rawAvailable = 100 - employee.utilization_pct;
+  const rawAvailable = 100 - (Number(employee.utilization_pct) || 0);
   return Math.min(100, Math.max(0, Math.round(rawAvailable)));
 }
 
@@ -107,7 +112,7 @@ export function scoreAvailability(employee: Employee): number {
 export function scoreWorkloadBalance(employee: Employee): number {
   if (employee.status !== 'Available') return 10;
 
-  const u = employee.utilization_pct;
+  const u = Number(employee.utilization_pct) || 0;
   if (u > 95) return 5;
   if (u > 85) return 30;
   if (u > 80) return 60;
@@ -120,8 +125,8 @@ export function scoreWorkloadBalance(employee: Employee): number {
  * Blended quality and on-time performance history
  */
 export function scorePerformance(employee: Employee): number {
-  const q = employee.performance.quality;
-  const ot = employee.performance.on_time;
+  const q = Number(employee.performance?.quality ?? 85);
+  const ot = Number(employee.performance?.on_time ?? 85);
   const blended = q * 0.45 + ot * 0.55;
   return Math.min(100, Math.max(0, Math.round(blended)));
 }
@@ -141,7 +146,7 @@ export function scoreLocationTimezone(task: Task, employee: Employee, targetRegi
     'APAC': ['South Asia']
   };
 
-  if (adjacentRegions[targetRegion]?.includes(employee.region)) {
+  if (targetRegion && adjacentRegions[targetRegion]?.includes(employee.region)) {
     return 70;
   }
   return 45;
@@ -302,18 +307,24 @@ export function findBestSkillMatch(task: Task, employees: Employee[]): SkillMatc
       currentMatchedSkill = 'General Engineering';
       currentProf = 75;
     } else {
+      const empSkills = Array.isArray(emp.skills) ? emp.skills : [];
       for (const req of reqSkills) {
-        const reqClean = req.skill_id.toLowerCase().replace(/^sk-/, '');
-        const empSkill = emp.skills.find(s => {
-          const sClean = s.skill_id.toLowerCase().replace(/^sk-/, '');
+        const reqSkillId = (req && req.skill_id) ? String(req.skill_id) : '';
+        const reqClean = reqSkillId.toLowerCase().replace(/^sk-/, '');
+        if (!reqClean) continue;
+
+        const empSkill = empSkills.find(s => {
+          if (!s || !s.skill_id) return false;
+          const sClean = String(s.skill_id).toLowerCase().replace(/^sk-/, '');
           return sClean === reqClean || sClean.includes(reqClean) || reqClean.includes(sClean);
         });
 
         if (empSkill) {
-          if (empSkill.proficiency_pct > skillScore) {
-            skillScore = empSkill.proficiency_pct;
-            currentMatchedSkill = req.skill_id.replace(/^sk-/, '').toUpperCase();
-            currentProf = empSkill.proficiency_pct;
+          const prof = Number(empSkill.proficiency_pct) || 0;
+          if (prof > skillScore) {
+            skillScore = prof;
+            currentMatchedSkill = reqSkillId.replace(/^sk-/, '').toUpperCase();
+            currentProf = prof;
           }
         }
       }
