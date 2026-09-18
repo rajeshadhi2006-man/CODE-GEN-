@@ -1,0 +1,1002 @@
+import { create } from 'zustand';
+import { 
+  Employee, 
+  Task, 
+  Project, 
+  AuditLog, 
+  NotificationItem, 
+  AIRecommendation, 
+  AllocationWeights, 
+  User, 
+  UserRole,
+  MetricSnapshot
+} from '../data/types';
+import { DEFAULT_WEIGHTS } from '../engine/scoring';
+import { calculateSLARisk } from '../engine/sla';
+import { createReallocationRecommendation } from '../engine/reallocation';
+import { realtimeBus } from './realtimeBus';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { 
+  fetchAllDataFromSupabase, 
+  subscribeToSupabaseRealtime,
+  insertEmployeeToSupabase,
+  updateEmployeeInSupabase,
+  deleteEmployeeFromSupabase,
+  insertTaskToSupabase,
+  updateTaskInSupabase,
+  deleteTaskFromSupabase,
+  insertAuditLogToSupabase,
+  updateRecommendationInSupabase,
+  updateWeightsInSupabase
+} from '../services/supabaseService';
+import { 
+  checkPythonHealth, 
+  optimizeWithPython, 
+  calculatePythonScore, 
+  simulateDisruptionWithPython,
+  sendAssignmentEmail
+} from '../services/pythonApiService';
+
+export interface MetricHistoryPoint {
+  timestamp: number;
+  workforce: number;
+  utilization: number;
+  sla: number;
+  atRisk: number;
+  critical: number;
+  unassigned: number;
+  headroom: number;
+  recommendations: number;
+}
+
+export interface NexusState {
+  // Real Enterprise Data from Supabase
+  employees: Employee[];
+  tasks: Task[];
+  projects: Project[];
+  auditLogs: AuditLog[];
+  notifications: NotificationItem[];
+  recommendations: AIRecommendation[];
+  weights: AllocationWeights;
+  currentUser: User;
+
+  // Supabase Connection & Loading State
+  isLoading: boolean;
+  supabaseError: string | null;
+  isSupabaseConnected: boolean;
+  isSupabaseModalOpen: boolean;
+
+  // Python FastAPI AI Backend State
+  isPythonOnline: boolean;
+  pythonVersion: string | null;
+  checkPythonStatus: () => Promise<void>;
+
+  // View & Filter State
+  activeTab: string;
+  selectedRegion: string;
+  isAIOptimizing: boolean;
+  selectedTaskIdForExplain: string | null;
+  selectedRecommendationId: string | null;
+  isCommandPaletteOpen: boolean;
+  isNotificationsOpen: boolean;
+  isRealTimeActive: boolean;
+  isCreateTaskModalOpen: boolean;
+  isCreateEmployeeModalOpen: boolean;
+
+  // Spatial Workstation & Split View State
+  isSplitView: boolean;
+  secondaryTab: string;
+  isDockPinned: boolean;
+  isQuickHudOpen: boolean;
+
+  // Real-time dynamic clock (ms timestamp updated every second)
+  currentTimestamp: number;
+
+  // Scripted Demo Mode (Section 9 Beat Sheet)
+  demoStep: number;
+  disruptedEmployeeId: string | null;
+
+  // Real Computed metrics and rolling live history
+  metrics: MetricSnapshot;
+  metricHistory: MetricHistoryPoint[];
+
+  // Actions
+  setRole: (role: UserRole) => void;
+  setActiveTab: (tab: string) => void;
+  setSelectedRegion: (region: string) => void;
+  setWeights: (weights: AllocationWeights) => Promise<void>;
+  toggleRealTime: () => void;
+  
+  // Real-time CRUD actions against Supabase
+  addEmployee: (emp: Partial<Employee>) => Promise<void>;
+  addTask: (task: Partial<Task>) => Promise<void>;
+  deleteEmployee: (id: string) => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
+  clearAllData: () => Promise<void>;
+  seedRealisticLiveBatch: () => Promise<void>;
+
+  // Reallocation Actions
+  triggerDisruption: (employeeId?: string) => Promise<void>;
+  optimizeAll: () => Promise<void>;
+  optimizeTask: (taskId: string) => Promise<void>;
+  approveRecommendation: (recommendationId: string) => Promise<void>;
+  rejectRecommendation: (recommendationId: string) => Promise<void>;
+  
+  // UI Actions
+  openExplainModal: (taskId: string, recommendationId?: string) => void;
+  closeExplainModal: () => void;
+  toggleCommandPalette: (open?: boolean) => void;
+  toggleNotifications: (open?: boolean) => void;
+  toggleCreateTaskModal: (open?: boolean) => void;
+  toggleCreateEmployeeModal: (open?: boolean) => void;
+  toggleSupabaseModal: (open?: boolean) => void;
+  toggleSplitView: () => void;
+  setSecondaryTab: (tab: string) => void;
+  toggleDockPinned: () => void;
+  toggleQuickHud: (open?: boolean) => void;
+  markNotificationsRead: () => void;
+
+  // Supabase Lifecycle Sync
+  initializeSupabaseSync: () => Promise<void>;
+  teardownRealtime: () => void;
+
+  // Live Real-Time Tick Engine
+  tickRealTime: () => void;
+
+  // Demo Beats
+  advanceDemoBeat: () => void;
+  resetToInitialSeed: () => Promise<void>;
+}
+
+/**
+ * Computes metrics 100% dynamically from active data arrays - zero hardcoded values
+ */
+export function computeMetrics(tasks: Task[], employees: Employee[], nowMs: number = Date.now()): MetricSnapshot {
+  const total = tasks.length;
+  if (total === 0) {
+    return {
+      sla_compliance_pct: 0,
+      average_utilization_pct: employees.length > 0 
+        ? Number((employees.reduce((acc, e) => acc + e.utilization_pct, 0) / employees.length).toFixed(1))
+        : 0,
+      at_risk_tasks_count: 0,
+      critical_tasks_count: 0,
+      unassigned_count: 0,
+      breach_predicted_count: 0
+    };
+  }
+
+  let atRisk = 0;
+  let critical = 0;
+  let unassigned = 0;
+  let breached = 0;
+
+  for (const t of tasks) {
+    if (!t.assigned_employee_id) unassigned++;
+    if (t.priority === 'Critical') critical++;
+    
+    // Evaluate risk mathematically with live nowMs
+    const emp = employees.find(e => e.id === t.assigned_employee_id) || null;
+    const r = calculateSLARisk(t, emp, nowMs);
+    if (r.risk_tier === 'Critical' || r.risk_tier === 'High' || t.status === 'AtRisk') {
+      atRisk++;
+    }
+    if (r.risk_tier === 'Breached') {
+      breached++;
+    }
+  }
+
+  const compliantCount = Math.max(0, total - breached - Math.round(atRisk * 0.35));
+  const slaCompliance = Number(((compliantCount / total) * 100).toFixed(1));
+
+  const totalUtil = employees.reduce((acc, e) => acc + e.utilization_pct, 0);
+  const avgUtil = employees.length > 0 
+    ? Number((totalUtil / employees.length).toFixed(1)) 
+    : 0;
+
+  return {
+    sla_compliance_pct: slaCompliance,
+    average_utilization_pct: avgUtil,
+    at_risk_tasks_count: atRisk,
+    critical_tasks_count: critical,
+    unassigned_count: unassigned,
+    breach_predicted_count: breached
+  };
+}
+
+function appendMetricHistory(
+  metrics: MetricSnapshot,
+  workforceCount: number,
+  recCount: number,
+  history: MetricHistoryPoint[] = [],
+  now: number = Date.now()
+): MetricHistoryPoint[] {
+  const newPoint: MetricHistoryPoint = {
+    timestamp: now,
+    workforce: workforceCount,
+    utilization: metrics.average_utilization_pct,
+    sla: metrics.sla_compliance_pct,
+    atRisk: metrics.at_risk_tasks_count,
+    critical: metrics.critical_tasks_count,
+    unassigned: metrics.unassigned_count,
+    headroom: workforceCount > 0 ? Number((100 - metrics.average_utilization_pct).toFixed(1)) : 0,
+    recommendations: recCount
+  };
+  return [...history, newPoint].slice(-15);
+}
+
+let activeRealtimeUnsub: (() => void) | null = null;
+
+export const useNexusStore = create<NexusState>((set, get) => ({
+  // ZERO HARDCODED PREDEFINED RECORDS: Starts clean from Supabase
+  employees: [],
+  tasks: [],
+  projects: [],
+  auditLogs: [],
+  notifications: [],
+  recommendations: [],
+  weights: DEFAULT_WEIGHTS,
+  currentUser: {
+    id: 'user-admin',
+    name: 'Executive Controller',
+    role: 'Super Admin',
+    email: 'admin@nexus.corp',
+    org_id: 'org-global',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
+  },
+
+  // Connection & loading state
+  isLoading: true,
+  supabaseError: null,
+  isSupabaseConnected: false,
+  isSupabaseModalOpen: false,
+
+  isPythonOnline: false,
+  pythonVersion: null,
+
+  checkPythonStatus: async () => {
+    const res = await checkPythonHealth();
+    set({
+      isPythonOnline: res.online,
+      pythonVersion: res.data?.python_version || null
+    });
+  },
+
+  activeTab: 'command-center',
+  selectedRegion: 'All',
+  isAIOptimizing: false,
+  selectedTaskIdForExplain: null,
+  selectedRecommendationId: null,
+  isCommandPaletteOpen: false,
+  isNotificationsOpen: false,
+  isRealTimeActive: true,
+  isCreateTaskModalOpen: false,
+  isCreateEmployeeModalOpen: false,
+  isSplitView: false,
+  secondaryTab: 'live-allocation',
+  isDockPinned: true,
+  isQuickHudOpen: false,
+  currentTimestamp: Date.now(),
+
+  demoStep: 0,
+  disruptedEmployeeId: null,
+  metrics: {
+    sla_compliance_pct: 0,
+    average_utilization_pct: 0,
+    at_risk_tasks_count: 0,
+    critical_tasks_count: 0,
+    unassigned_count: 0,
+    breach_predicted_count: 0
+  },
+  metricHistory: [],
+
+  toggleSupabaseModal: (open?: boolean) => {
+    set(state => ({ isSupabaseModalOpen: open !== undefined ? open : !state.isSupabaseModalOpen }));
+  },
+
+  setRole: (role: UserRole) => {
+    set(state => ({
+      currentUser: { ...state.currentUser, role }
+    }));
+  },
+
+  setActiveTab: (tab: string) => {
+    set({ activeTab: tab });
+  },
+
+  setSelectedRegion: (region: string) => {
+    set({ selectedRegion: region });
+  },
+
+  toggleRealTime: () => {
+    set(state => ({ isRealTimeActive: !state.isRealTimeActive }));
+  },
+
+  toggleCreateTaskModal: (open?: boolean) => {
+    set(state => ({ isCreateTaskModalOpen: open !== undefined ? open : !state.isCreateTaskModalOpen }));
+  },
+
+  toggleCreateEmployeeModal: (open?: boolean) => {
+    set(state => ({ isCreateEmployeeModalOpen: open !== undefined ? open : !state.isCreateEmployeeModalOpen }));
+  },
+
+  toggleSplitView: () => {
+    set(state => {
+      const nextSplit = !state.isSplitView;
+      // If turning on split view and secondary is same as primary, pick a complementary tab
+      let nextSecondary = state.secondaryTab;
+      if (nextSplit && nextSecondary === state.activeTab) {
+        nextSecondary = state.activeTab === 'sla-risk' ? 'live-allocation' : 'sla-risk';
+      }
+      return { isSplitView: nextSplit, secondaryTab: nextSecondary };
+    });
+  },
+
+  setSecondaryTab: (tab: string) => {
+    set({ secondaryTab: tab });
+  },
+
+  toggleDockPinned: () => {
+    set(state => ({ isDockPinned: !state.isDockPinned }));
+  },
+
+  toggleQuickHud: (open?: boolean) => {
+    set(state => ({ isQuickHudOpen: open !== undefined ? open : !state.isQuickHudOpen }));
+  },
+
+  // --------------------------------------------------------------------------
+  // Supabase Realtime Initialization & Lifecycle
+  // --------------------------------------------------------------------------
+
+  initializeSupabaseSync: async () => {
+    set({ isLoading: true, supabaseError: null });
+
+    const configured = isSupabaseConfigured();
+    if (!configured) {
+      set({
+        isLoading: false,
+        isSupabaseConnected: false,
+        supabaseError: 'Supabase credentials not configured. Please supply VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
+      });
+      return;
+    }
+
+    try {
+      const result = await fetchAllDataFromSupabase();
+      if (result.error) {
+        set({
+          isLoading: false,
+          isSupabaseConnected: false,
+          supabaseError: result.error
+        });
+        return;
+      }
+
+      const initialMetrics = computeMetrics(result.tasks, result.employees);
+      const initialHistory = appendMetricHistory(
+        initialMetrics, 
+        result.employees.length, 
+        result.recommendations.length, 
+        []
+      );
+
+      set({
+        employees: result.employees,
+        tasks: result.tasks,
+        projects: result.projects,
+        auditLogs: result.auditLogs,
+        recommendations: result.recommendations,
+        weights: result.weights || get().weights,
+        metrics: initialMetrics,
+        metricHistory: initialHistory,
+        isLoading: false,
+        isSupabaseConnected: true,
+        supabaseError: null
+      });
+
+      // Tear down existing realtime channel if any
+      if (activeRealtimeUnsub) {
+        activeRealtimeUnsub();
+        activeRealtimeUnsub = null;
+      }
+
+      // Establish Supabase Realtime pub-sub channel
+      activeRealtimeUnsub = subscribeToSupabaseRealtime({
+        onEmployeeChange: ({ eventType, newRecord, oldRecord }) => {
+          const { employees, tasks } = get();
+          let updatedEmps = employees;
+
+          if (eventType === 'INSERT') {
+            updatedEmps = [newRecord, ...employees.filter(e => e.id !== newRecord.id)];
+          } else if (eventType === 'UPDATE') {
+            updatedEmps = employees.map(e => e.id === newRecord.id ? newRecord : e);
+          } else if (eventType === 'DELETE') {
+            updatedEmps = employees.filter(e => e.id !== oldRecord.id);
+          }
+
+          const m = computeMetrics(tasks, updatedEmps);
+          const h = appendMetricHistory(m, updatedEmps.length, get().recommendations.length, get().metricHistory);
+          set({ employees: updatedEmps, metrics: m, metricHistory: h });
+        },
+
+        onTaskChange: ({ eventType, newRecord, oldRecord }) => {
+          const { tasks, employees } = get();
+          let updatedTasks = tasks;
+
+          if (eventType === 'INSERT') {
+            updatedTasks = [newRecord, ...tasks.filter(t => t.id !== newRecord.id)];
+          } else if (eventType === 'UPDATE') {
+            updatedTasks = tasks.map(t => t.id === newRecord.id ? newRecord : t);
+          } else if (eventType === 'DELETE') {
+            updatedTasks = tasks.filter(t => t.id !== oldRecord.id);
+          }
+
+          const m = computeMetrics(updatedTasks, employees);
+          const h = appendMetricHistory(m, employees.length, get().recommendations.length, get().metricHistory);
+          set({ tasks: updatedTasks, metrics: m, metricHistory: h });
+        },
+
+        onProjectChange: ({ eventType, newRecord, oldRecord }) => {
+          const { projects } = get();
+          if (eventType === 'INSERT') {
+            set({ projects: [newRecord, ...projects.filter(p => p.id !== newRecord.id)] });
+          } else if (eventType === 'UPDATE') {
+            set({ projects: projects.map(p => p.id === newRecord.id ? newRecord : p) });
+          } else if (eventType === 'DELETE') {
+            set({ projects: projects.filter(p => p.id !== oldRecord.id) });
+          }
+        },
+
+        onAuditLogChange: ({ eventType, newRecord }) => {
+          if (eventType === 'INSERT') {
+            set(state => ({ auditLogs: [newRecord, ...state.auditLogs].slice(0, 100) }));
+          }
+        },
+
+        onRecommendationChange: ({ eventType, newRecord, oldRecord }) => {
+          const { recommendations } = get();
+          if (eventType === 'INSERT') {
+            set({ recommendations: [newRecord, ...recommendations.filter(r => r.id !== newRecord.id)] });
+          } else if (eventType === 'UPDATE') {
+            set({ recommendations: recommendations.map(r => r.id === newRecord.id ? newRecord : r) });
+          } else if (eventType === 'DELETE') {
+            set({ recommendations: recommendations.filter(r => r.id !== oldRecord.id) });
+          }
+        },
+
+        onWeightChange: ({ newRecord }) => {
+          if (newRecord) {
+            set({
+              weights: {
+                skill: Number(newRecord.skill || 30),
+                sla: Number(newRecord.sla || 25),
+                availability: Number(newRecord.availability || 15),
+                workload: Number(newRecord.workload || 10),
+                performance: Number(newRecord.performance || 10),
+                location: Number(newRecord.location || 5),
+                business_impact: Number(newRecord.business_impact || 5)
+              }
+            });
+          }
+        }
+      });
+    } catch (err: any) {
+      set({
+        isLoading: false,
+        isSupabaseConnected: false,
+        supabaseError: err.message || 'Initialization failed'
+      });
+    }
+  },
+
+  teardownRealtime: () => {
+    if (activeRealtimeUnsub) {
+      activeRealtimeUnsub();
+      activeRealtimeUnsub = null;
+    }
+  },
+
+  // --------------------------------------------------------------------------
+  // Real-Time CRUD Mutations (Supabase Single Source of Truth)
+  // --------------------------------------------------------------------------
+
+  setWeights: async (weights: AllocationWeights) => {
+    set({ weights });
+    const audit: AuditLog = {
+      id: `audit-weight-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: get().currentUser.name,
+      event_type: 'POLICY_CHANGE',
+      before: 'Default allocation scoring weights',
+      after: `Skill:${weights.skill}% SLA:${weights.sla}% Avail:${weights.availability}% Workload:${weights.workload}% Perf:${weights.performance}%`,
+      reason: 'Admin Control Center scoring policy reconfiguration',
+      approval_outcome: 'AUTO_APPROVED'
+    };
+    set(state => ({ auditLogs: [audit, ...state.auditLogs] }));
+
+    try {
+      await updateWeightsInSupabase(weights);
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase weight update notice:', err);
+    }
+  },
+
+  addEmployee: async (empData: Partial<Employee>) => {
+    const { employees, tasks } = get();
+    const newId = empData.id || `E-${(employees.length + 1).toString().padStart(3, '0')}`;
+    const newEmp: Employee = {
+      id: newId,
+      name: empData.name || 'New Engineer',
+      title: empData.title || 'Platform Engineer',
+      email: empData.email || `${(empData.name || 'engineer').toLowerCase().replace(/\s+/g, '.')}@nexus.corp`,
+      location: empData.location || 'Singapore Hub',
+      region: (empData.region as any) || 'APAC',
+      timezone: empData.timezone || 'UTC+8',
+      skills: empData.skills || [{ skill_id: 'sk-aws', proficiency_pct: 85 }],
+      performance: empData.performance || { quality: 90, on_time: 95, tasks_completed_30d: 0 },
+      capacity_hours: empData.capacity_hours || 40,
+      utilization_pct: empData.utilization_pct || 50,
+      status: empData.status || 'Available',
+      current_tasks: [],
+      shift: empData.shift || { start: '09:00', end: '18:00' },
+      certifications: empData.certifications || ['Certified Cloud Specialist'],
+      avatar: empData.avatar || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150`
+    };
+
+    // Optimistic local state update
+    const updated = [newEmp, ...employees];
+    const newMetrics = computeMetrics(tasks, updated);
+    const updatedHistory = appendMetricHistory(newMetrics, updated.length, get().recommendations.length, get().metricHistory);
+    set({ employees: updated, metrics: newMetrics, metricHistory: updatedHistory });
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `Engineer ${newEmp.name} (${newEmp.id}) added to ${newEmp.region} team.`
+    });
+
+    try {
+      await insertEmployeeToSupabase(newEmp);
+    } catch (err) {
+      console.warn('Supabase employee insert notice:', err);
+    }
+  },
+
+  addTask: async (taskData: Partial<Task>) => {
+    const { tasks, employees } = get();
+    const newCode = taskData.code || `T-${(tasks.length + 100).toString()}`;
+    const newTask: Task = {
+      id: taskData.id || `task-${Date.now()}`,
+      code: newCode,
+      name: taskData.name || 'Urgent Cloud Work Order',
+      project_id: taskData.project_id || (get().projects[0]?.id || 'proj-1'),
+      priority: taskData.priority || 'High',
+      business_impact_score: taskData.business_impact_score || 85,
+      required_skills: taskData.required_skills || [{ skill_id: 'sk-aws', min_proficiency: 75 }],
+      estimated_effort_min: taskData.estimated_effort_min || 120,
+      remaining_effort_min: taskData.remaining_effort_min || 120,
+      sla_deadline: taskData.sla_deadline || new Date(Date.now() + 180 * 60 * 1000).toISOString(),
+      dependency_ids: taskData.dependency_ids || [],
+      assigned_employee_id: taskData.assigned_employee_id || null,
+      status: taskData.assigned_employee_id ? 'InProgress' : 'Ready',
+      created_at: new Date().toISOString()
+    };
+
+    const updated = [newTask, ...tasks];
+    const newMetrics = computeMetrics(updated, employees);
+    const updatedHistory = appendMetricHistory(newMetrics, employees.length, get().recommendations.length, get().metricHistory);
+    set({ tasks: updated, metrics: newMetrics, metricHistory: updatedHistory });
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `New task ${newTask.code} (${newTask.priority}) logged into delivery queue.`
+    });
+
+    // Automated single-recipient assignment email dispatch via SMTP
+    if (newTask.assigned_employee_id) {
+      const assignedEmp = employees.find(e => e.id === newTask.assigned_employee_id);
+      if (assignedEmp) {
+        sendAssignmentEmail(newTask, assignedEmp).then(record => {
+          if (record) {
+            realtimeBus.publish('NOTIFICATION_RECEIVED', {
+              message: `📧 Direct dispatch email sent to ${assignedEmp.name} (${record.recipient_email}) via SMTP.`
+            });
+          }
+        }).catch(err => console.warn('Email dispatch notice:', err));
+      }
+    }
+
+    try {
+      await insertTaskToSupabase(newTask);
+    } catch (err) {
+      console.warn('Supabase task insert notice:', err);
+    }
+  },
+
+  deleteEmployee: async (id: string) => {
+    const { employees, tasks } = get();
+    const updated = employees.filter(e => e.id !== id);
+    const unassignedTasks = tasks.map(t => t.assigned_employee_id === id ? { ...t, assigned_employee_id: null, status: 'Ready' as const } : t);
+    const newMetrics = computeMetrics(unassignedTasks, updated);
+    const updatedHistory = appendMetricHistory(newMetrics, updated.length, get().recommendations.length, get().metricHistory);
+    set({ employees: updated, tasks: unassignedTasks, metrics: newMetrics, metricHistory: updatedHistory });
+
+    try {
+      await deleteEmployeeFromSupabase(id);
+    } catch (err) {
+      console.warn('Supabase employee delete notice:', err);
+    }
+  },
+
+  deleteTask: async (id: string) => {
+    const { tasks, employees } = get();
+    const updated = tasks.filter(t => t.id !== id);
+    const newMetrics = computeMetrics(updated, employees);
+    const updatedHistory = appendMetricHistory(newMetrics, employees.length, get().recommendations.length, get().metricHistory);
+    set({ tasks: updated, metrics: newMetrics, metricHistory: updatedHistory });
+
+    try {
+      await deleteTaskFromSupabase(id);
+    } catch (err) {
+      console.warn('Supabase task delete notice:', err);
+    }
+  },
+
+  clearAllData: async () => {
+    set({
+      employees: [],
+      tasks: [],
+      projects: [],
+      recommendations: [],
+      auditLogs: [],
+      notifications: [],
+      metricHistory: [],
+      metrics: {
+        sla_compliance_pct: 100,
+        average_utilization_pct: 0,
+        at_risk_tasks_count: 0,
+        critical_tasks_count: 0,
+        unassigned_count: 0,
+        breach_predicted_count: 0
+      }
+    });
+  },
+
+  seedRealisticLiveBatch: async () => {
+    // Pure Supabase mode - no fake seeds permitted
+    await get().initializeSupabaseSync();
+  },
+
+  triggerDisruption: async (employeeId?: string) => {
+    const { employees, tasks } = get();
+    const target = employees.find(e => employeeId ? e.id === employeeId : e.status === 'Available');
+    if (!target) return;
+
+    const updatedEmployees = employees.map(e => 
+      e.id === target.id ? { ...e, status: 'Unavailable' as const, utilization_pct: 0 } : e
+    );
+
+    const affectedTasks = tasks.filter(t => t.assigned_employee_id === target.id);
+    const updatedTasks = tasks.map(t => 
+      t.assigned_employee_id === target.id ? { ...t, status: 'AtRisk' as const } : t
+    );
+
+    realtimeBus.publish('DISRUPTION_DETECTED', {
+      employeeId: target.id,
+      employeeName: target.name,
+      affectedTaskCount: affectedTasks.length,
+      affectedTasks: affectedTasks.map(t => t.code)
+    });
+
+    const audit: AuditLog = {
+      id: `audit-disrupt-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: 'System Telemetry Monitor',
+      event_type: 'DISRUPTION',
+      before: `Engineer ${target.name} (${target.id}) Active`,
+      after: 'Sudden Unavailability Triggered',
+      reason: 'Automated Disruption Event injected by Controller.',
+      approval_outcome: 'AUTO_APPROVED'
+    };
+
+    const newMetrics = computeMetrics(updatedTasks, updatedEmployees);
+    set(state => ({
+      employees: updatedEmployees,
+      tasks: updatedTasks,
+      metrics: newMetrics,
+      auditLogs: [audit, ...state.auditLogs],
+      disruptedEmployeeId: target.id
+    }));
+
+    try {
+      await updateEmployeeInSupabase(target.id, { status: 'Unavailable', utilization_pct: 0 });
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase disruption update notice:', err);
+    }
+  },
+
+  optimizeAll: async () => {
+    set({ isAIOptimizing: true });
+    realtimeBus.publish('AI_OPTIMIZATION_STARTED', { scope: 'GLOBAL_FLEET' });
+
+    const { tasks, employees, weights, isPythonOnline } = get();
+    const unassignedOrAtRisk = tasks.filter(t => !t.assigned_employee_id || t.status === 'AtRisk' || t.priority === 'Critical');
+
+    // Attempt heavy-compute optimization via Python backend first
+    if (isPythonOnline) {
+      try {
+        const pythonRecs = await optimizeWithPython(unassignedOrAtRisk, employees, weights);
+        if (pythonRecs && pythonRecs.length > 0) {
+          set({
+            recommendations: pythonRecs,
+            isAIOptimizing: false,
+            selectedRecommendationId: pythonRecs[0]?.id || null
+          });
+          realtimeBus.publish('RECOMMENDATION_GENERATED', {
+            proposalsCount: pythonRecs.length,
+            engine: 'Python 3.12 FastAPI'
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn('Python optimize fallback to TS engine:', err);
+      }
+    }
+
+    // Fallback to client-side TS deterministic engine
+    setTimeout(() => {
+      const newRecs: AIRecommendation[] = [];
+      for (const t of unassignedOrAtRisk.slice(0, 5)) {
+        const rec = createReallocationRecommendation(t, employees, t.assigned_employee_id || null, weights);
+        if (rec) newRecs.push(rec);
+      }
+
+      set({
+        recommendations: newRecs,
+        isAIOptimizing: false,
+        selectedRecommendationId: newRecs[0]?.id || null
+      });
+
+      realtimeBus.publish('RECOMMENDATION_GENERATED', {
+        proposalsCount: newRecs.length,
+        engine: 'Client TypeScript Engine'
+      });
+    }, 600);
+  },
+
+  optimizeTask: async (taskId: string) => {
+    set({ isAIOptimizing: true });
+    const { tasks, employees, weights } = get();
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) {
+      set({ isAIOptimizing: false });
+      return;
+    }
+
+    setTimeout(() => {
+      const rec = createReallocationRecommendation(task, employees, task.assigned_employee_id || null, weights);
+      if (rec) {
+        set(state => ({
+          recommendations: [rec, ...state.recommendations.filter(r => r.task_id !== taskId)],
+          selectedRecommendationId: rec.id,
+          isAIOptimizing: false
+        }));
+      } else {
+        set({ isAIOptimizing: false });
+      }
+    }, 600);
+  },
+
+  approveRecommendation: async (recommendationId: string) => {
+    const { recommendations, tasks, employees, currentUser } = get();
+    const rec = recommendations.find(r => r.id === recommendationId);
+    if (!rec) return;
+
+    const task = tasks.find(t => t.id === rec.task_id);
+    const targetEmp = employees.find(e => e.id === rec.to_employee_id);
+    if (!task || !targetEmp) return;
+
+    const updatedTasks = tasks.map(t => 
+      t.id === task.id ? { ...t, assigned_employee_id: targetEmp.id, status: 'InProgress' as const } : t
+    );
+
+    const updatedEmployees = employees.map(e => {
+      if (e.id === targetEmp.id) {
+        return {
+          ...e,
+          utilization_pct: Math.min(100, e.utilization_pct + Math.round((task.remaining_effort_min / (e.capacity_hours * 60)) * 100)),
+          current_tasks: Array.from(new Set([...e.current_tasks, task.id]))
+        };
+      }
+      return e;
+    });
+
+    const audit: AuditLog = {
+      id: `audit-appr-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${currentUser.role} (${currentUser.name})`,
+      event_type: 'REALLOCATION',
+      task_id: task.id,
+      task_code: task.code,
+      before: rec.from_employee_id || 'Unassigned',
+      after: `${targetEmp.name} (${targetEmp.id})`,
+      reason: `Human-in-the-loop sign-off on AI proposed optimal reallocation.`,
+      score: rec.score.total_score,
+      approval_outcome: 'MANAGER_APPROVED'
+    };
+
+    const newMetrics = computeMetrics(updatedTasks, updatedEmployees);
+
+    set(state => ({
+      tasks: updatedTasks,
+      employees: updatedEmployees,
+      recommendations: state.recommendations.filter(r => r.id !== recommendationId),
+      auditLogs: [audit, ...state.auditLogs],
+      metrics: newMetrics,
+      selectedRecommendationId: null
+    }));
+
+    realtimeBus.publish('REALLOCATION_APPROVED', {
+      taskId: task.id,
+      taskCode: task.code,
+      newAssigneeId: targetEmp.id,
+      newAssigneeName: targetEmp.name
+    });
+
+    // Automated single-recipient dispatch email to the approved assignee
+    sendAssignmentEmail(task, targetEmp, undefined, rec.reason).then(record => {
+      if (record) {
+        realtimeBus.publish('NOTIFICATION_RECEIVED', {
+          message: `📧 Direct dispatch email sent to ${targetEmp.name} (${record.recipient_email}) via SMTP.`
+        });
+      }
+    }).catch(err => console.warn('Email dispatch on approval notice:', err));
+
+    try {
+      await updateTaskInSupabase(task.id, { assigned_employee_id: targetEmp.id, status: 'InProgress' });
+      await updateRecommendationInSupabase(recommendationId, { status: 'Approved' });
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase approval update notice:', err);
+    }
+  },
+
+  rejectRecommendation: async (recommendationId: string) => {
+    const { recommendations, tasks, currentUser } = get();
+    const rec = recommendations.find(r => r.id === recommendationId);
+    if (!rec) return;
+
+    const task = tasks.find(t => t.id === rec.task_id);
+
+    const audit: AuditLog = {
+      id: `audit-reject-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${currentUser.role} (${currentUser.name})`,
+      event_type: 'MANUAL_OVERRIDE',
+      task_id: task?.id,
+      task_code: task?.code,
+      before: `AI Proposed ${rec.to_employee_id}`,
+      after: 'Proposal Rejected by User',
+      reason: 'Rejected by operational authority; alternatives requested.',
+      score: rec.score.total_score,
+      approval_outcome: 'REJECTED'
+    };
+
+    set(state => ({
+      recommendations: state.recommendations.filter(r => r.id !== recommendationId),
+      auditLogs: [audit, ...state.auditLogs]
+    }));
+
+    try {
+      await updateRecommendationInSupabase(recommendationId, { status: 'Rejected' });
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase reject notice:', err);
+    }
+  },
+
+  openExplainModal: (taskId: string, recommendationId?: string) => {
+    set({
+      selectedTaskIdForExplain: taskId,
+      selectedRecommendationId: recommendationId || null
+    });
+  },
+
+  closeExplainModal: () => {
+    set({
+      selectedTaskIdForExplain: null,
+      selectedRecommendationId: null
+    });
+  },
+
+  toggleCommandPalette: (open?: boolean) => {
+    set(state => ({ isCommandPaletteOpen: open !== undefined ? open : !state.isCommandPaletteOpen }));
+  },
+
+  toggleNotifications: (open?: boolean) => {
+    set(state => ({ isNotificationsOpen: open !== undefined ? open : !state.isNotificationsOpen }));
+  },
+
+  markNotificationsRead: () => {
+    set(state => ({
+      notifications: state.notifications.map(n => ({ ...n, read: true }))
+    }));
+  },
+
+  tickRealTime: () => {
+    const { tasks, employees, isRealTimeActive } = get();
+    const now = Date.now();
+    if (!isRealTimeActive) {
+      set({ currentTimestamp: now });
+      return;
+    }
+
+    let changed = false;
+    const updatedTasks = tasks.map(t => {
+      if (t.status === 'InProgress' && t.assigned_employee_id && t.remaining_effort_min > 0) {
+        changed = true;
+        const newEffort = Math.max(0, t.remaining_effort_min - 1);
+        return {
+          ...t,
+          remaining_effort_min: newEffort,
+          status: newEffort === 0 ? ('Completed' as const) : t.status
+        };
+      }
+      return t;
+    });
+
+    const newMetrics = computeMetrics(updatedTasks, employees, now);
+    set({ tasks: updatedTasks, metrics: newMetrics, currentTimestamp: now });
+  },
+
+  advanceDemoBeat: () => {
+    const current = get().demoStep;
+    if (current === 0) {
+      get().triggerDisruption('E-023');
+    } else if (current === 1) {
+      set({ isAIOptimizing: true, demoStep: 2 });
+      realtimeBus.publish('AI_OPTIMIZATION_STARTED', { scope: 'T-104_CRITICAL' });
+      setTimeout(() => {
+        set({ isAIOptimizing: false, demoStep: 3 });
+        const { tasks, employees, weights } = get();
+        const t104 = tasks.find(t => t.code === 'T-104');
+        if (t104) {
+          const rec = createReallocationRecommendation(t104, employees, 'E-023', weights);
+          if (rec) {
+            set(state => ({
+              recommendations: [rec, ...state.recommendations.filter(r => r.task_id !== t104.id)],
+              selectedRecommendationId: rec.id
+            }));
+          }
+        }
+      }, 1000);
+    } else if (current === 3) {
+      const { recommendations } = get();
+      const rec = recommendations[0];
+      if (rec) {
+        get().approveRecommendation(rec.id);
+        set({ demoStep: 5 });
+      }
+    }
+  },
+
+  resetToInitialSeed: async () => {
+    await get().initializeSupabaseSync();
+  }
+}));
+
+// Live background ticker running every 1.5 seconds for visible real-time reactivity
+if (typeof window !== 'undefined') {
+  setInterval(() => {
+    useNexusStore.getState().tickRealTime();
+  }, 1500);
+
+  // Automatically initialize Supabase sync and Python backend on app boot
+  setTimeout(() => {
+    useNexusStore.getState().initializeSupabaseSync();
+    useNexusStore.getState().checkPythonStatus();
+  }, 50);
+
+  setInterval(() => {
+    useNexusStore.getState().checkPythonStatus();
+  }, 10000);
+}

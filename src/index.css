@@ -1,0 +1,354 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-void: var(--bg-void);
+  --color-bg-panel: var(--bg-panel);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-overlay: var(--bg-overlay);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+
+  --color-accent: var(--accent);
+  --color-accent-glow: var(--accent-glow);
+
+  --color-status-critical: var(--status-critical);
+  --color-status-high: var(--status-high);
+  --color-status-medium: var(--status-medium);
+  --color-status-healthy: var(--status-healthy);
+  --color-status-neutral: var(--status-neutral);
+}
+
+@layer base {
+  :root {
+    /* ========================================================
+       DARK BLUE CYBER-EXECUTIVE THEME
+       - Background: Deep Cosmic Dark Blue (#0A0F1D / #080D1A)
+       - Cards & Panels: Rich Obsidian Slate Blue (#111C35 / #0F172A)
+       - Accent: Electric Cyber Blue (#38BDF8) & Royal Violet (#723EC3)
+       - Borders: Crisp Dark Navy Slate (#1D2D4A)
+       - Text: High-Contrast Pure Ice White (#F8FAFC / #94A3B8)
+       ======================================================== */
+
+    /* Surfaces */
+    --bg-void:        #080D1A;   /* Main background: Deep Cosmic Dark Blue */
+    --bg-panel:       #0F172A;   /* Table headers & search bars: Deep Slate Blue */
+    --bg-sidebar:     #0B1120;   /* Sidebar: Midnight Navy */
+    --bg-header:      #090E1C;   /* Header: Obsidian Navy */
+    --bg-elevated:    #111C35;   /* Cards & Modals: Deep Navy Elevated */
+    --bg-secondary:   #162340;   /* Secondary badges & sub-surfaces */
+    --bg-overlay:     rgba(4, 8, 18, 0.82); /* Modal backdrop */
+    --hairline:       #1D2D4A;   /* Crisp Slate-Navy borders */
+    --hairline-strong: #38BDF8;  /* Accent border: Electric Cyber Blue */
+
+    /* Text */
+    --text-primary:   #F8FAFC;   /* Pure Ice White high-contrast text */
+    --text-secondary: #94A3B8;   /* Cool Slate Blue secondary text */
+    --text-tertiary:  #64748B;   /* Muted Steel tertiary text */
+    --text-on-dark:   #F8FAFC;   /* Crisp White */
+
+    /* Accents */
+    --accent:         #38BDF8;   /* Electric Cyber Blue */
+    --accent-glow:    rgba(56, 189, 248, 0.4);
+    --button-text:    #FFFFFF;
+
+    /* Semantic status */
+    --status-critical:  #EF4444; /* Red */
+    --status-high:      #F97316; /* Orange */
+    --status-medium:    #FBBF24; /* Amber */
+    --status-healthy:   #10B981; /* Emerald Green */
+    --status-neutral:   #38BDF8; /* Electric Blue */
+
+    /* Fonts */
+    --font-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    border-color: var(--hairline);
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-void);
+    background-image: 
+      radial-gradient(circle 900px at 15% 10%, rgba(56, 189, 248, 0.12) 0%, transparent 60%),
+      radial-gradient(circle 850px at 85% 20%, rgba(99, 102, 241, 0.14) 0%, transparent 60%),
+      radial-gradient(circle 900px at 50% 85%, rgba(2, 132, 199, 0.10) 0%, transparent 70%),
+      radial-gradient(circle 600px at 70% 60%, rgba(16, 185, 129, 0.06) 0%, transparent 55%),
+      radial-gradient(rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 24px 24px;
+    background-attachment: fixed;
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  .font-mono-data {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum" 1;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1D2D4A;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #38BDF8;
+  }
+}
+
+/* ========================================================
+   BLENDED COLOR 3D DEPTH ENGINE & TRANSLUCENT GLASS
+   ======================================================== */
+
+/* 3D Depth Card with Frosted Color Blending & Chromatic Specular Rim */
+.card-3d {
+  background: linear-gradient(145deg, rgba(17, 28, 53, 0.85) 0%, rgba(13, 22, 43, 0.92) 50%, rgba(19, 31, 58, 0.85) 100%);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(56, 189, 248, 0.16);
+  box-shadow: 
+    0 4px 16px -2px rgba(0, 0, 0, 0.5),
+    0 16px 32px -8px rgba(8, 13, 26, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: perspective(1200px) translateZ(0);
+  position: relative;
+}
+
+.card-3d::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.7) 30%, rgba(129, 140, 248, 0.7) 70%, transparent 100%);
+  pointer-events: none;
+}
+
+.card-3d:hover {
+  transform: perspective(1200px) translateY(-3.5px) translateZ(8px);
+  box-shadow: 
+    0 8px 28px -4px rgba(0, 0, 0, 0.6),
+    0 24px 48px -10px rgba(56, 189, 248, 0.16),
+    0 0 20px -2px rgba(99, 102, 241, 0.18),
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(56, 189, 248, 0.4);
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+/* 3D Tactile Buttons with Blended Cyan-to-Violet Spectrum */
+.btn-3d-primary {
+  background: linear-gradient(135deg, #38BDF8 0%, #2563EB 50%, #7C3AED 100%) !important;
+  color: #FFFFFF !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.5) !important;
+  border-bottom: 1px solid #1E3A8A !important;
+  box-shadow: 
+    0 3.5px 0 #172554,
+    0 8px 22px -2px rgba(37, 99, 235, 0.55) !important;
+  transition: all 0.14s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.6);
+}
+
+.btn-3d-primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1.5px);
+  box-shadow: 
+    0 5px 0 #172554,
+    0 14px 28px -2px rgba(37, 99, 235, 0.7) !important;
+}
+
+.btn-3d-primary:active {
+  transform: translateY(3px) !important;
+  box-shadow: 
+    0 0.5px 0 #172554,
+    0 2px 8px rgba(37, 99, 235, 0.4) !important;
+}
+
+.btn-3d-secondary {
+  background: linear-gradient(180deg, #162444 0%, #111C35 100%) !important;
+  color: #F8FAFC !important;
+  border: 1px solid #23385D !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 
+    0 3px 0 #0D162B,
+    0 6px 14px -2px rgba(0, 0, 0, 0.4) !important;
+  transition: all 0.14s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.btn-3d-secondary:hover {
+  background: linear-gradient(180deg, #1C2D55 0%, #142240 100%) !important;
+  border-color: #38BDF8 !important;
+  transform: translateY(-1.5px);
+  box-shadow: 
+    0 4.5px 0 #0D162B,
+    0 10px 20px -2px rgba(56, 189, 248, 0.15) !important;
+}
+
+.btn-3d-secondary:active {
+  transform: translateY(2.5px) !important;
+  box-shadow: 
+    0 0.5px 0 #0D162B,
+    0 2px 4px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* 3D Pill Badges */
+.badge-3d {
+  box-shadow: 
+    0 1.5px 3px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Glassmorphism & Panel Utilities */
+.glass-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--hairline);
+  box-shadow: 
+    0 4px 16px -2px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.glass-modal {
+  background: #111C35;
+  border: 1px solid #1D2D4A;
+  box-shadow: 
+    0 0 0 1px rgba(56, 189, 248, 0.2),
+    0 24px 60px -12px rgba(0, 0, 0, 0.7),
+    0 48px 96px -20px rgba(8, 13, 26, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.button-inner-highlight {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+@keyframes ai-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 20px 6px rgba(56, 189, 248, 0.7);
+  }
+}
+
+.animate-ai-glow {
+  animation: ai-pulse 2s infinite ease-in-out;
+}
+
+/* Contrast Protection: High contrast on dark surfaces */
+main h1.text-white,
+main h2.text-white,
+main h3.text-white,
+main h4.text-white,
+main p.text-white,
+main span.text-white:not([class*="bg-"]):not(button *),
+main td.text-white,
+.glass-modal h3.text-white,
+.glass-modal p.text-white,
+.glass-modal span.text-white:not([class*="bg-"]):not(button *) {
+  color: var(--text-primary);
+}
+
+/* Ensure buttons and badges with colorful backgrounds keep white text */
+button.text-white,
+button .text-white,
+.btn-3d-primary,
+.btn-3d-primary *,
+[class*="bg-[var(--accent)]"],
+[class*="bg-[#38BDF8]"],
+[class*="bg-[#723EC3]"],
+[class*="bg-[#EF4444]"],
+[class*="bg-[#10B981]"] {
+  color: #FFFFFF !important;
+}
+
+/* Inputs and interactive fields inside modals/panels */
+input, select, textarea {
+  background-color: #0F172A !important;
+  color: #F8FAFC !important;
+  border-color: #1D2D4A !important;
+}
+input::placeholder, textarea::placeholder {
+  color: #64748B !important;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: #38BDF8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2) !important;
+  outline: none;
+}
+
+/* ========================================================
+   SPATIAL WORKSTATION & FLOATING DOCK STYLING
+   ======================================================== */
+
+/* Floating Glass Dock */
+.spatial-dock {
+  background: rgba(13, 22, 43, 0.92);
+  backdrop-filter: blur(24px) saturate(190%);
+  -webkit-backdrop-filter: blur(24px) saturate(190%);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 
+    0 20px 50px -10px rgba(0, 0, 0, 0.7),
+    0 4px 16px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.spatial-dock:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 
+    0 24px 60px -10px rgba(56, 189, 248, 0.2),
+    0 6px 20px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* Dynamic Island Capsule */
+.dynamic-island-capsule {
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 
+    0 8px 24px -6px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: all 0.25s ease;
+}
+
+.dynamic-island-capsule:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 
+    0 10px 30px -6px rgba(56, 189, 248, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* Split Workstation Pane */
+.split-workstation-pane {
+  background: #111C35;
+  border: 1px solid var(--hairline);
+  box-shadow: 0 8px 32px -4px rgba(0, 0, 0, 0.5);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
