@@ -11,7 +11,7 @@ import {
   UserRole,
   MetricSnapshot
 } from '../data/types';
-import { DEFAULT_WEIGHTS } from '../engine/scoring';
+import { DEFAULT_WEIGHTS, findBestSkillMatch } from '../engine/scoring';
 import { calculateSLARisk } from '../engine/sla';
 import { createReallocationRecommendation } from '../engine/reallocation';
 import { realtimeBus } from './realtimeBus';
@@ -116,6 +116,7 @@ export interface NexusState {
   deleteEmployee: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   clearAllTasks: () => Promise<void>;
+  autoAssignAllUnassignedTasks: () => Promise<number>;
   clearAllData: () => Promise<void>;
   seedRealisticLiveBatch: () => Promise<void>;
 
@@ -609,20 +610,61 @@ export const useNexusStore = create<NexusState>((set, get) => ({
       created_at: new Date().toISOString()
     };
 
-    const updated = [newTask, ...tasks];
-    const newMetrics = computeMetrics(updated, employees);
-    const updatedHistory = appendMetricHistory(newMetrics, employees.length, get().recommendations.length, get().metricHistory);
-    set({ tasks: updated, metrics: newMetrics, metricHistory: updatedHistory });
+    // Autonomous AI Skill Matching Engine: automatically match to top qualified specialist
+    let assignedEmpId = taskData.assigned_employee_id || null;
+    let matchExplanation = '';
+    let autoMatchedEmp: Employee | null = null;
 
-    realtimeBus.publish('NOTIFICATION_RECEIVED', {
-      message: `New task ${newTask.code} (${newTask.priority}) logged into delivery queue.`
-    });
+    if (!assignedEmpId && employees.length > 0) {
+      const matchResult = findBestSkillMatch(newTask, employees);
+      if (matchResult) {
+        assignedEmpId = matchResult.employee.id;
+        autoMatchedEmp = matchResult.employee;
+        matchExplanation = matchResult.reason;
+      }
+    }
+
+    newTask.assigned_employee_id = assignedEmpId;
+    newTask.status = assignedEmpId ? 'InProgress' : 'Ready';
+
+    // Update assigned employee workload and capacity
+    let updatedEmployees = employees;
+    if (assignedEmpId) {
+      const effortHours = (newTask.remaining_effort_min || 60) / 60;
+      updatedEmployees = employees.map(e => {
+        if (e.id === assignedEmpId) {
+          const cur = e.current_tasks.includes(newTask.id) ? e.current_tasks : [...e.current_tasks, newTask.id];
+          const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+          return {
+            ...e,
+            current_tasks: cur,
+            utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+          };
+        }
+        return e;
+      });
+    }
+
+    const updated = [newTask, ...tasks];
+    const newMetrics = computeMetrics(updated, updatedEmployees);
+    const updatedHistory = appendMetricHistory(newMetrics, updatedEmployees.length, get().recommendations.length, get().metricHistory);
+    set({ tasks: updated, employees: updatedEmployees, metrics: newMetrics, metricHistory: updatedHistory });
+
+    if (autoMatchedEmp) {
+      realtimeBus.publish('NOTIFICATION_RECEIVED', {
+        message: `🤖 AI Auto-Assigned Task ${newTask.code} to ${autoMatchedEmp.name} (${matchExplanation})`
+      });
+    } else {
+      realtimeBus.publish('NOTIFICATION_RECEIVED', {
+        message: `New task ${newTask.code} (${newTask.priority}) logged into delivery queue.`
+      });
+    }
 
     // Automated single-recipient assignment email dispatch via SMTP
     if (newTask.assigned_employee_id) {
-      const assignedEmp = employees.find(e => e.id === newTask.assigned_employee_id);
+      const assignedEmp = updatedEmployees.find(e => e.id === newTask.assigned_employee_id);
       if (assignedEmp) {
-        sendAssignmentEmail(newTask, assignedEmp).then(record => {
+        sendAssignmentEmail(newTask, assignedEmp, undefined, matchExplanation || 'Autonomous AI Skill Matcher').then(record => {
           if (record) {
             realtimeBus.publish('NOTIFICATION_RECEIVED', {
               message: `📧 Direct dispatch email sent to ${assignedEmp.name} (${record.recipient_email}) via SMTP.`
@@ -637,6 +679,70 @@ export const useNexusStore = create<NexusState>((set, get) => ({
     } catch (err) {
       console.warn('Supabase task insert notice:', err);
     }
+  },
+
+  autoAssignAllUnassignedTasks: async () => {
+    const { tasks, employees } = get();
+    const unassigned = tasks.filter(t => !t.assigned_employee_id);
+    if (unassigned.length === 0 || employees.length === 0) return 0;
+
+    let assignedCount = 0;
+    let currentTasks = [...tasks];
+    let currentEmployees = [...employees];
+
+    for (const task of unassigned) {
+      const match = findBestSkillMatch(task, currentEmployees);
+      if (!match) continue;
+
+      const emp = match.employee;
+      const effortHours = (task.remaining_effort_min || 60) / 60;
+
+      currentTasks = currentTasks.map(t =>
+        t.id === task.id ? { ...t, assigned_employee_id: emp.id, status: 'InProgress' as const } : t
+      );
+
+      currentEmployees = currentEmployees.map(e => {
+        if (e.id === emp.id) {
+          const cur = e.current_tasks.includes(task.id) ? e.current_tasks : [...e.current_tasks, task.id];
+          const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+          return {
+            ...e,
+            current_tasks: cur,
+            utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+          };
+        }
+        return e;
+      });
+
+      sendAssignmentEmail(
+        { ...task, assigned_employee_id: emp.id, status: 'InProgress' as const },
+        emp,
+        undefined,
+        match.reason
+      );
+
+      updateTaskInSupabase(task.id, { assigned_employee_id: emp.id, status: 'InProgress' }).catch(err =>
+        console.warn('Supabase auto-assign notice:', err)
+      );
+
+      assignedCount++;
+    }
+
+    const newMetrics = computeMetrics(currentTasks, currentEmployees);
+    const updatedHistory = appendMetricHistory(newMetrics, currentEmployees.length, get().recommendations.length, get().metricHistory);
+
+    set({
+      tasks: currentTasks,
+      employees: currentEmployees,
+      metrics: newMetrics,
+      metricHistory: updatedHistory
+    });
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `🤖 AI Auto-Assigned ${assignedCount} tasks based on specialized employee skills.`
+    });
+
+    return assignedCount;
   },
 
   assignTask: async (taskId: string, employeeId: string, customNote?: string) => {

@@ -264,3 +264,94 @@ export function rankCandidates(
     allScores: rankedScores
   };
 }
+
+export interface SkillMatchResult {
+  employee: Employee;
+  score: number;
+  matchedSkill: string;
+  proficiency: number;
+  reason: string;
+}
+
+/**
+ * Autonomous AI Skill Matching Engine.
+ * Automatically identifies the single best employee whose specialized skills match
+ * the task requirements, factoring in skill proficiency, availability, and capacity headroom.
+ */
+export function findBestSkillMatch(task: Task, employees: Employee[]): SkillMatchResult | null {
+  if (!employees || employees.length === 0) return null;
+
+  const reqSkills = task.required_skills || [];
+  let bestCandidate: Employee | null = null;
+  let highestScore = -1;
+  let bestSkillName = 'General Engineering';
+  let bestProf = 80;
+  let bestReason = '';
+
+  // Filter available employees first, fallback to all if none
+  const pool = employees.filter(e => e.status !== 'Unavailable');
+  const candidatePool = pool.length > 0 ? pool : employees;
+
+  for (const emp of candidatePool) {
+    let skillScore = 0;
+    let currentMatchedSkill = '';
+    let currentProf = 0;
+
+    if (reqSkills.length === 0) {
+      skillScore = 75;
+      currentMatchedSkill = 'General Engineering';
+      currentProf = 75;
+    } else {
+      for (const req of reqSkills) {
+        const reqClean = req.skill_id.toLowerCase().replace(/^sk-/, '');
+        const empSkill = emp.skills.find(s => {
+          const sClean = s.skill_id.toLowerCase().replace(/^sk-/, '');
+          return sClean === reqClean || sClean.includes(reqClean) || reqClean.includes(sClean);
+        });
+
+        if (empSkill) {
+          if (empSkill.proficiency_pct > skillScore) {
+            skillScore = empSkill.proficiency_pct;
+            currentMatchedSkill = req.skill_id.replace(/^sk-/, '').toUpperCase();
+            currentProf = empSkill.proficiency_pct;
+          }
+        }
+      }
+    }
+
+    // Unmatched penalty
+    if (skillScore === 0) {
+      skillScore = 15;
+    }
+
+    // Capacity headroom (100 - util)
+    const capacityHeadroom = Math.max(0, 100 - (emp.utilization_pct || 0));
+    const onTimeScore = emp.performance?.on_time || 85;
+
+    // AI Allocation Formula: Skill Proficiency 60%, Capacity Headroom 25%, On-Time SLA 15%
+    const compositeScore = Math.round((skillScore * 0.60) + (capacityHeadroom * 0.25) + (onTimeScore * 0.15));
+
+    if (compositeScore > highestScore) {
+      highestScore = compositeScore;
+      bestCandidate = emp;
+      bestSkillName = currentMatchedSkill || 'General';
+      bestProf = currentProf || skillScore;
+      bestReason = currentMatchedSkill
+        ? `Autonomous AI Skill Match: ${emp.name} has ${bestProf}% ${bestSkillName} proficiency with ${capacityHeadroom}% capacity headroom.`
+        : `Autonomous AI Capacity Match: ${emp.name} selected based on ${capacityHeadroom}% bandwidth and ${onTimeScore}% on-time rate.`;
+    }
+  }
+
+  if (bestCandidate) {
+    return {
+      employee: bestCandidate,
+      score: highestScore,
+      matchedSkill: bestSkillName,
+      proficiency: bestProf,
+      reason: bestReason
+    };
+  }
+
+  return null;
+}
+

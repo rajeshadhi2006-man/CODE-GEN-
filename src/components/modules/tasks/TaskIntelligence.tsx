@@ -11,7 +11,8 @@ import {
   AlertTriangle,
   Mail,
   CheckCircle2,
-  Send
+  Send,
+  Cpu
 } from 'lucide-react';
 import { useNexusStore } from '../../../store/useNexusStore';
 import { Badge } from '../../ui/Badge';
@@ -29,7 +30,8 @@ export const TaskIntelligence: React.FC = () => {
     deleteTask, 
     assignTask, 
     resendTaskEmail,
-    clearAllTasks
+    clearAllTasks,
+    autoAssignAllUnassignedTasks
   } = useNexusStore();
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,7 +42,19 @@ export const TaskIntelligence: React.FC = () => {
   const [emailSendingTaskId, setEmailSendingTaskId] = useState<string | null>(null);
   const [testEmailStatus, setTestEmailStatus] = useState<string | null>(null);
   const [isTestingEmail, setIsTestingEmail] = useState(false);
+  const [isAutoAssigning, setIsAutoAssigning] = useState(false);
   const pageSize = 20;
+
+  const unassignedCount = tasks.filter(t => !t.assigned_employee_id).length;
+
+  const handleAutoAssignAll = async () => {
+    setIsAutoAssigning(true);
+    try {
+      await autoAssignAllUnassignedTasks();
+    } finally {
+      setIsAutoAssigning(false);
+    }
+  };
 
   const handleResendEmail = async (taskId: string) => {
     setEmailSendingTaskId(taskId);
@@ -103,6 +117,17 @@ export const TaskIntelligence: React.FC = () => {
                 title="Wipe all tasks to 0"
               >
                 <Trash2 size={11} /> Clear All Tasks (Make 0)
+              </button>
+            )}
+            {unassignedCount > 0 && (
+              <button
+                onClick={handleAutoAssignAll}
+                disabled={isAutoAssigning}
+                className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-white shadow-sm flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                title="Automatically match all unassigned tasks to specialists with corresponding skills"
+              >
+                <Cpu size={11} className={isAutoAssigning ? 'animate-spin' : 'animate-pulse'} />
+                {isAutoAssigning ? 'Auto-Assigning...' : `AI Auto-Assign ${unassignedCount} by Skill`}
               </button>
             )}
           </div>
@@ -353,7 +378,7 @@ export const TaskIntelligence: React.FC = () => {
               variant="bordered"
               size="sm"
               disabled={page === 1}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
+              onClick={() => setPage((p: number) => Math.max(1, p - 1))}
             >
               Previous
             </Button>
@@ -362,7 +387,7 @@ export const TaskIntelligence: React.FC = () => {
               variant="bordered"
               size="sm"
               disabled={page >= totalPages}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              onClick={() => setPage((p: number) => Math.min(totalPages, p + 1))}
             >
               Next
             </Button>

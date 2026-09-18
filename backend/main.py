@@ -31,7 +31,8 @@ from .engine.simulation import run_disruption_simulation
 from .supabase_service import (
     test_supabase_connection,
     fetch_live_data_from_supabase,
-    save_recommendations_to_supabase
+    save_recommendations_to_supabase,
+    get_supabase_client
 )
 from .smtp_service import (
     send_assignment_email,
@@ -42,11 +43,31 @@ from .smtp_service import (
 _processed_assignments = set()
 _initial_sync_done = False
 
+def find_best_skill_candidate(task: Task, employees: List[Employee]) -> Optional[Employee]:
+    if not employees:
+        return None
+    req_skills = [r.skill_id.lower().replace("sk-", "") for r in (task.required_skills or [])]
+    best_emp = None
+    best_score = -1.0
+    for emp in employees:
+        skill_score = 15.0
+        for s in (emp.skills or []):
+            s_name = s.skill_id.lower().replace("sk-", "")
+            if not req_skills or any(req in s_name or s_name in req for req in req_skills):
+                if s.proficiency_pct > skill_score:
+                    skill_score = s.proficiency_pct
+        headroom = max(0.0, 100.0 - (emp.utilization_pct or 0.0))
+        score = (skill_score * 0.6) + (headroom * 0.4)
+        if score > best_score:
+            best_score = score
+            best_emp = emp
+    return best_emp
+
 async def supabase_assignment_watcher():
     """
-    Continuous background monitor that observes Supabase for newly assigned tasks.
-    When a task assignment is detected (whether via User Portal, Admin Portal, or direct DB update),
-    dispatches the single-recipient SMTP notification immediately.
+    Continuous background monitor that observes Supabase for tasks.
+    1. If an unassigned task arrives, automatically allocates it to the specialist with matching skills.
+    2. When a task assignment is detected, dispatches the single-recipient SMTP notification immediately.
     """
     global _processed_assignments, _initial_sync_done
     await asyncio.sleep(2)
@@ -57,6 +78,7 @@ async def supabase_assignment_watcher():
             live_data = fetch_live_data_from_supabase()
             tasks = live_data.get("tasks", [])
             employees = {e.id: e for e in live_data.get("employees", [])}
+            emp_list = list(employees.values())
 
             if not _initial_sync_done:
                 for t in tasks:
@@ -83,10 +105,32 @@ async def supabase_assignment_watcher():
                                     print(f"[Supabase Watcher] Email dispatch error: {e}")
                             _processed_assignments.add(key)
                     else:
-                        # Clear assignment key if task became unassigned
-                        to_remove = [k for k in _processed_assignments if k[0] == t.id]
-                        for k in to_remove:
-                            _processed_assignments.remove(k)
+                        # Unassigned task detected -> Autonomous AI Auto-Assignment by Skill
+                        best_candidate = find_best_skill_candidate(t, emp_list)
+                        if best_candidate:
+                            print(f"[Supabase Watcher] 🤖 AI Auto-Assigning unassigned Task {t.code} to specialist {best_candidate.name} based on skills...")
+                            client = get_supabase_client()
+                            if client:
+                                try:
+                                    client.table('tasks').update({
+                                        'assigned_employee_id': best_candidate.id,
+                                        'status': 'InProgress'
+                                    }).eq('id', t.id).execute()
+                                except Exception as e:
+                                    print(f"[Supabase Watcher] DB update error: {e}")
+                            
+                            t.assigned_employee_id = best_candidate.id
+                            t.status = 'InProgress'
+                            try:
+                                send_assignment_email(AssignmentEmailRequest(
+                                    task=t,
+                                    employee=best_candidate,
+                                    custom_note="Autonomous AI Skill Matcher allocation",
+                                    match_reason=f"AI matched specialist skills for {t.code}"
+                                ))
+                            except Exception as e:
+                                print(f"[Supabase Watcher] Email dispatch error: {e}")
+                            _processed_assignments.add((t.id, best_candidate.id))
         except Exception as e:
             print(f"[Supabase Watcher] Loop warning: {e}")
 

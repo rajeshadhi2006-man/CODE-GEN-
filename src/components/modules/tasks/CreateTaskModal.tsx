@@ -5,7 +5,8 @@ import { Button } from '../../ui/Button';
 import { SKILLS_LIST } from '../../../data/seed';
 import { TaskPriority } from '../../../data/types';
 import { findBestExpert, ExpertMatchCandidate } from '../../../services/pythonApiService';
-import { Sparkles, Mail, CheckCircle2, UserCheck, ShieldAlert } from 'lucide-react';
+import { findBestSkillMatch } from '../../../engine/scoring';
+import { Sparkles, Mail, CheckCircle2, UserCheck, ShieldAlert, Cpu } from 'lucide-react';
 
 export const CreateTaskModal: React.FC = () => {
   const { isCreateTaskModalOpen, toggleCreateTaskModal, addTask, employees } = useNexusStore();
@@ -15,12 +16,22 @@ export const CreateTaskModal: React.FC = () => {
   const [effortMin, setEffortMin] = useState(120);
   const [slaHours, setSlaHours] = useState(4);
   const [selectedSkillId, setSelectedSkillId] = useState('sk-python');
-  const [assignedEmpId, setAssignedEmpId] = useState('');
+  const [assignedEmpId, setAssignedEmpId] = useState('auto');
   
   // Real-time talent matching state
   const [isMatching, setIsMatching] = useState(false);
   const [topMatch, setTopMatch] = useState<ExpertMatchCandidate | null>(null);
   const [matchMessage, setMatchMessage] = useState<string | null>(null);
+
+  // Compute live autonomous AI skill match
+  const liveSkillMatch = React.useMemo(() => {
+    return findBestSkillMatch(
+      {
+        required_skills: [{ skill_id: selectedSkillId, min_proficiency: 70 }]
+      } as any,
+      employees
+    );
+  }, [selectedSkillId, employees]);
 
   if (!isCreateTaskModalOpen) return null;
 
@@ -44,7 +55,11 @@ export const CreateTaskModal: React.FC = () => {
     }
   };
 
-  const selectedEmployee = employees.find(e => e.id === assignedEmpId);
+  const effectiveEmpId = assignedEmpId === 'auto' 
+    ? (liveSkillMatch?.employee.id || '') 
+    : assignedEmpId;
+
+  const selectedEmployee = employees.find(e => e.id === effectiveEmpId);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,7 +72,7 @@ export const CreateTaskModal: React.FC = () => {
       remaining_effort_min: effortMin,
       sla_deadline: new Date(Date.now() + slaHours * 60 * 60 * 1000).toISOString(),
       required_skills: [{ skill_id: selectedSkillId, min_proficiency: 75 }],
-      assigned_employee_id: assignedEmpId || null,
+      assigned_employee_id: effectiveEmpId || null,
       business_impact_score: priority === 'Critical' ? 95 : priority === 'High' ? 80 : 60
     });
 
@@ -206,10 +221,10 @@ export const CreateTaskModal: React.FC = () => {
           )}
         </div>
 
-        {/* Assigned Engineer Selector */}
+        {/* Assigned Engineer Selector with Autonomous AI Default */}
         <div>
           <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
-            Assigned Engineer & Recipient
+            Assignment Strategy & Engineer
           </label>
           <select
             value={assignedEmpId}
@@ -217,16 +232,37 @@ export const CreateTaskModal: React.FC = () => {
               setAssignedEmpId(e.target.value);
               setTopMatch(null);
             }}
-            className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white focus:outline-none focus:border-[var(--accent)]"
+            className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--accent)]/40 text-xs text-white focus:outline-none focus:border-[var(--accent)] font-medium"
           >
-            <option value="">Leave Unassigned (AI will queue for pool)</option>
+            <option value="auto" className="bg-slate-900 text-sky-300 font-bold">
+              🤖 Autonomous AI Skill Match (Recommended: {liveSkillMatch ? `${liveSkillMatch.employee.name} — ${liveSkillMatch.proficiency}% ${liveSkillMatch.matchedSkill}` : 'Auto-match'})
+            </option>
+            <option value="" className="bg-slate-900 text-amber-300">
+              Leave Unassigned (Queue for backlog)
+            </option>
             {employees.map(emp => (
-              <option key={emp.id} value={emp.id}>
-                {emp.name} ({emp.title}) • {emp.email || 'internal'} • {emp.region} ({emp.utilization_pct}% util)
+              <option key={emp.id} value={emp.id} className="bg-slate-900 text-slate-200">
+                Manual Override: {emp.name} ({emp.title}) • {emp.email || 'internal'} • {emp.region}
               </option>
             ))}
           </select>
         </div>
+
+        {/* Autonomous AI Skill Match Preview Badge */}
+        {assignedEmpId === 'auto' && liveSkillMatch && (
+          <div className="p-2.5 rounded-lg bg-sky-950/40 border border-sky-500/40 text-[11px] flex items-center justify-between text-sky-200 shadow-sm">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-sky-400 animate-pulse shrink-0" />
+              <div>
+                <span className="font-bold text-white">AI Skill Match:</span> Assigned to <strong className="text-sky-300">{liveSkillMatch.employee.name}</strong>
+                <span className="text-[10px] text-slate-300 block">{liveSkillMatch.reason}</span>
+              </div>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-sky-500/20 text-sky-200 border border-sky-500/40 shrink-0">
+              {liveSkillMatch.score}% MATCH
+            </span>
+          </div>
+        )}
 
         {/* Confidential Single-Recipient Dispatch Notice */}
         {selectedEmployee && (
