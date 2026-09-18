@@ -627,14 +627,61 @@ export const useNexusStore = create<NexusState>((set, get) => ({
   },
 
   deleteTask: async (id: string) => {
-    const { tasks, employees } = get();
-    const updated = tasks.filter(t => t.id !== id);
-    const newMetrics = computeMetrics(updated, employees);
-    const updatedHistory = appendMetricHistory(newMetrics, employees.length, get().recommendations.length, get().metricHistory);
-    set({ tasks: updated, metrics: newMetrics, metricHistory: updatedHistory });
+    const { tasks, employees, currentUser, recommendations } = get();
+    const targetTask = tasks.find(t => t.id === id);
+    if (!targetTask) return;
+
+    const updatedTasks = tasks.filter(t => t.id !== id);
+    
+    // Free up assigned employee capacity if task was assigned
+    const updatedEmployees = employees.map(e => {
+      if (e.id === targetTask.assigned_employee_id) {
+        const remainingTasks = e.current_tasks.filter(tid => tid !== id);
+        const effortHours = targetTask.remaining_effort_min / 60;
+        const utilReduction = Math.round((effortHours / e.capacity_hours) * 100);
+        return {
+          ...e,
+          current_tasks: remainingTasks,
+          utilization_pct: Math.max(0, e.utilization_pct - utilReduction)
+        };
+      }
+      return e;
+    });
+
+    const updatedRecs = recommendations.filter(r => r.task_id !== id);
+    const newMetrics = computeMetrics(updatedTasks, updatedEmployees);
+    const updatedHistory = appendMetricHistory(newMetrics, updatedEmployees.length, updatedRecs.length, get().metricHistory);
+
+    const audit: AuditLog = {
+      id: `audit-del-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${currentUser.role} (${currentUser.name})`,
+      event_type: 'MANUAL_OVERRIDE',
+      task_id: targetTask.id,
+      task_code: targetTask.code,
+      before: `Task ${targetTask.code}: ${targetTask.name} (${targetTask.priority})`,
+      after: 'Deleted from operational queue',
+      reason: 'Work order deleted by operator.',
+      approval_outcome: 'AUTO_APPROVED'
+    };
+
+    set(state => ({
+      tasks: updatedTasks,
+      employees: updatedEmployees,
+      recommendations: updatedRecs,
+      auditLogs: [audit, ...state.auditLogs],
+      metrics: newMetrics,
+      metricHistory: updatedHistory,
+      selectedTaskIdForExplain: state.selectedTaskIdForExplain === id ? null : state.selectedTaskIdForExplain
+    }));
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `Task ${targetTask.code} deleted from operational registry.`
+    });
 
     try {
       await deleteTaskFromSupabase(id);
+      await insertAuditLogToSupabase(audit);
     } catch (err) {
       console.warn('Supabase task delete notice:', err);
     }

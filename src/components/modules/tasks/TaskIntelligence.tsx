@@ -6,18 +6,22 @@ import {
   Clock, 
   AlertCircle, 
   Sparkles,
-  ArrowUpDown 
+  ArrowUpDown,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { useNexusStore } from '../../../store/useNexusStore';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
+import { Modal } from '../../ui/Modal';
 import { TaskStatus } from '../../../data/types';
 
 export const TaskIntelligence: React.FC = () => {
-  const { tasks, employees, openExplainModal, optimizeTask } = useNexusStore();
+  const { tasks, employees, openExplainModal, optimizeTask, deleteTask } = useNexusStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | TaskStatus>('All');
   const [page, setPage] = useState(1);
+  const [taskToDelete, setTaskToDelete] = useState<{ id: string; code: string; name: string } | null>(null);
   const pageSize = 20;
 
   const statuses: TaskStatus[] = [
@@ -193,6 +197,16 @@ export const TaskIntelligence: React.FC = () => {
                           >
                             Reallocate
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={<Trash2 size={12} className="text-red-400 group-hover:text-red-300" />}
+                            onClick={() => setTaskToDelete({ id: t.id, code: t.code, name: t.name })}
+                            className="text-xs text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-colors"
+                            title="Delete Task"
+                          >
+                            Delete
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -231,6 +245,54 @@ export const TaskIntelligence: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Delete Task Confirmation Modal */}
+      {taskToDelete && (
+        <Modal
+          isOpen={Boolean(taskToDelete)}
+          onClose={() => setTaskToDelete(null)}
+          title={`Delete Work Order ${taskToDelete.code}`}
+          subtitle="Are you sure you want to permanently remove this task from the delivery pipeline?"
+          maxWidth="sm"
+        >
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/40 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <p className="font-semibold text-white">
+                  "{taskToDelete.name}"
+                </p>
+                <p className="text-slate-400 leading-relaxed">
+                  Deleting this task will remove it from Supabase, release assigned engineer capacity, and recalculate global SLA metrics in real time.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <Button
+                variant="bordered"
+                size="sm"
+                onClick={() => setTaskToDelete(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                icon={<Trash2 size={13} />}
+                onClick={async () => {
+                  if (taskToDelete) {
+                    await deleteTask(taskToDelete.id);
+                    setTaskToDelete(null);
+                  }
+                }}
+              >
+                Confirm Delete
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

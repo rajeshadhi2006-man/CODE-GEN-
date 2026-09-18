@@ -7,17 +7,20 @@ import {
   Sparkles, 
   Calendar, 
   ArrowRight,
-  Info 
+  Info,
+  Trash2
 } from 'lucide-react';
 import { useNexusStore } from '../../../store/useNexusStore';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
+import { Modal } from '../../ui/Modal';
 import { calculateSLARisk } from '../../../engine/sla';
 import { Task } from '../../../data/types';
 
 export const SlaRiskCenter: React.FC = () => {
-  const { tasks, employees, openExplainModal, optimizeTask } = useNexusStore();
+  const { tasks, employees, openExplainModal, optimizeTask, deleteTask } = useNexusStore();
   const [selectedTaskId, setSelectedTaskId] = useState<string>(tasks[0]?.id || '');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Calculate risk metrics for all tasks
   const tasksWithRisk = tasks.map(t => {
@@ -154,6 +157,16 @@ export const SlaRiskCenter: React.FC = () => {
                   >
                     Explain Score
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Trash2 size={13} className="text-red-400" />}
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="text-xs text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                    title="Delete Work Order"
+                  >
+                    Delete
+                  </Button>
                 </div>
               </div>
 
@@ -245,6 +258,53 @@ export const SlaRiskCenter: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {selectedItem && showDeleteConfirm && (
+        <Modal
+          isOpen={showDeleteConfirm}
+          onClose={() => setShowDeleteConfirm(false)}
+          title={`Delete Work Order ${selectedItem.task.code}`}
+          subtitle="Are you sure you want to permanently remove this work order?"
+          maxWidth="sm"
+        >
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/40 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1">
+                <p className="font-semibold text-white">
+                  "{selectedItem.task.name}"
+                </p>
+                <p className="text-slate-400 leading-relaxed">
+                  Permanently deletes this task from Supabase, frees assigned engineer bandwidth, and updates real-time SLA metrics.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <Button
+                variant="bordered"
+                size="sm"
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                icon={<Trash2 size={13} />}
+                onClick={async () => {
+                  const idToDelete = selectedItem.task.id;
+                  setShowDeleteConfirm(false);
+                  await deleteTask(idToDelete);
+                }}
+              >
+                Confirm Delete
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
