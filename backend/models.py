@@ -30,6 +30,7 @@ class PerformanceMetrics(BaseModel):
     quality: float = 85.0
     on_time: float = 90.0
     tasks_completed_30d: int = 0
+    past_works: Optional[List[Dict[str, Any]]] = None
 
 class ShiftInfo(BaseModel):
     start: str = "09:00"
@@ -47,27 +48,27 @@ class TaskSkillRequirement(BaseModel):
 class Employee(BaseModel):
     id: str
     name: str
-    title: str = "Engineer"
-    email: str = ""
-    location: str = "Global Delivery Hub"
-    region: Literal['Americas', 'EMEA', 'APAC', 'LATAM', 'South Asia'] = "Americas"
-    timezone: str = "UTC"
+    title: Optional[str] = "Engineer"
+    email: Optional[str] = ""
+    location: Optional[str] = "Global Delivery Hub"
+    region: Optional[str] = "Americas"
+    timezone: Optional[str] = "UTC"
     skills: List[EmployeeSkillProficiency] = []
     performance: PerformanceMetrics = PerformanceMetrics()
     capacity_hours: float = 40.0
     utilization_pct: float = 0.0
-    status: EmployeeStatus = "Available"
+    status: Optional[str] = "Available"
     current_tasks: List[str] = []
     shift: ShiftInfo = ShiftInfo()
     certifications: List[str] = []
-    avatar: str = ""
+    avatar: Optional[str] = None
 
 class Task(BaseModel):
     id: str
     code: str
     name: str
-    project_id: str = ""
-    priority: TaskPriority = "Medium"
+    project_id: Optional[str] = ""
+    priority: Optional[str] = "Medium"
     business_impact_score: float = 50.0
     required_skills: List[TaskSkillRequirement] = []
     estimated_effort_min: float = 60.0
@@ -75,17 +76,19 @@ class Task(BaseModel):
     sla_deadline: str
     dependency_ids: List[str] = []
     assigned_employee_id: Optional[str] = None
-    status: TaskStatus = "Backlog"
+    status: Optional[str] = "Backlog"
     created_at: Optional[str] = None
 
 class Project(BaseModel):
     id: str
     name: str
-    client_id: str = ""
+    client_id: Optional[str] = ""
+    client_name: Optional[str] = ""
+    client_tier: Optional[str] = "Tier-1"
     task_ids: List[str] = []
     sla_target_pct: float = 95.0
-    health: Literal['Healthy', 'AtRisk', 'Critical'] = "Healthy"
-    region: str = "Americas"
+    health: Optional[str] = "Healthy"
+    region: Optional[str] = "Americas"
 
 class AllocationWeights(BaseModel):
     skill: float = 30.0

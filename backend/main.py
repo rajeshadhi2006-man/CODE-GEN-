@@ -1,8 +1,11 @@
 import sys
 from datetime import datetime, timezone
 from typing import List, Optional
+from contextlib import asynccontextmanager
+import asyncio
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from .config import CORS_ORIGINS, SUPABASE_URL
 from .models import (
@@ -36,10 +39,76 @@ from .smtp_service import (
     match_top_expert
 )
 
+_processed_assignments = set()
+_initial_sync_done = False
+
+async def supabase_assignment_watcher():
+    """
+    Continuous background monitor that observes Supabase for newly assigned tasks.
+    When a task assignment is detected (whether via User Portal, Admin Portal, or direct DB update),
+    dispatches the single-recipient SMTP notification immediately.
+    """
+    global _processed_assignments, _initial_sync_done
+    await asyncio.sleep(2)
+    print("[Supabase Watcher] Started continuous Supabase task assignment monitor.")
+
+    while True:
+        try:
+            live_data = fetch_live_data_from_supabase()
+            tasks = live_data.get("tasks", [])
+            employees = {e.id: e for e in live_data.get("employees", [])}
+
+            if not _initial_sync_done:
+                for t in tasks:
+                    if t.assigned_employee_id:
+                        _processed_assignments.add((t.id, t.assigned_employee_id))
+                _initial_sync_done = True
+                print(f"[Supabase Watcher] Initialized with {len(_processed_assignments)} active assignments.")
+            else:
+                for t in tasks:
+                    if t.assigned_employee_id:
+                        key = (t.id, t.assigned_employee_id)
+                        if key not in _processed_assignments:
+                            emp = employees.get(t.assigned_employee_id)
+                            if emp and emp.email:
+                                print(f"[Supabase Watcher] New assignment detected: Task {t.code} -> {emp.name} ({emp.email}). Dispatching SMTP...")
+                                try:
+                                    send_assignment_email(AssignmentEmailRequest(
+                                        task=t,
+                                        employee=emp,
+                                        custom_note="Autonomous system dispatch via Supabase real-time sync",
+                                        match_reason="Task allocated in Nexus Workforce Registry"
+                                    ))
+                                except Exception as e:
+                                    print(f"[Supabase Watcher] Email dispatch error: {e}")
+                            _processed_assignments.add(key)
+                    else:
+                        # Clear assignment key if task became unassigned
+                        to_remove = [k for k in _processed_assignments if k[0] == t.id]
+                        for k in to_remove:
+                            _processed_assignments.remove(k)
+        except Exception as e:
+            print(f"[Supabase Watcher] Loop warning: {e}")
+
+        await asyncio.sleep(4)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: launch background watcher
+    watcher_task = asyncio.create_task(supabase_assignment_watcher())
+    yield
+    # Shutdown: cancel watcher
+    watcher_task.cancel()
+    try:
+        await watcher_task
+    except asyncio.CancelledError:
+        pass
+
 app = FastAPI(
     title="NEXUS WORKFORCE OS — AI Allocation & Optimization Engine",
     description="Deterministic 7-Factor Autonomous Resource Allocation, Dynamic SLA Risk Engine & Simulation Lab",
-    version="2.4.0"
+    version="2.4.0",
+    lifespan=lifespan
 )
 
 # Enable CORS for the React/Vite web application
@@ -150,6 +219,39 @@ def get_notification_outbox(limit: int = 50):
     """
     return get_outbox(limit=limit)
 
+class TestEmailRequest(BaseModel):
+    recipient_email: str
+    employee_name: Optional[str] = "Team Member"
+    custom_note: Optional[str] = "Live SMTP Connection Test"
+
+@app.post("/api/notifications/test-email", response_model=EmailDispatchRecord)
+def send_test_email(req: TestEmailRequest):
+    """
+    Directly dispatches a test email via SMTP to verify live email delivery to any user or employee.
+    """
+    test_task = Task(
+        id=f"test-{int(datetime.now(timezone.utc).timestamp())}",
+        code="SYS-TEST",
+        name="Verification of Real-Time Email Delivery Gateway",
+        priority="High",
+        estimated_effort_min=30,
+        remaining_effort_min=30,
+        sla_deadline=datetime.now(timezone.utc).isoformat(),
+        business_impact_score=95
+    )
+    test_emp = Employee(
+        id="emp-test",
+        name=req.employee_name or "Team Member",
+        email=req.recipient_email,
+        title="Platform Engineer"
+    )
+    return send_assignment_email(AssignmentEmailRequest(
+        task=test_task,
+        employee=test_emp,
+        custom_note=req.custom_note,
+        match_reason="Automated Email Delivery Gateway Verification"
+    ))
+
 @app.post("/api/match-expert", response_model=ExpertMatchResponse)
 def match_expert(req: ExpertMatchRequest):
     """
@@ -160,4 +262,5 @@ def match_expert(req: ExpertMatchRequest):
         return match_top_expert(req)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Expert matching error: {str(e)}")
+
 

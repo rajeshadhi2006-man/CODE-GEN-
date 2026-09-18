@@ -200,7 +200,7 @@ export async function sendAssignmentEmail(
         custom_note: customNote,
         match_reason: matchReason
       }),
-      signal: AbortSignal.timeout(6000)
+      signal: AbortSignal.timeout(20000)
     });
     if (!res.ok) {
       console.warn('[Python API] Email dispatch returned non-200:', res.status);
@@ -227,6 +227,32 @@ export async function getNotificationOutbox(limit = 50): Promise<EmailDispatchRe
     return await res.json();
   } catch {
     return [];
+  }
+}
+
+/**
+ * Send a direct test email via SMTP to verify configuration and delivery.
+ */
+export async function sendTestEmail(
+  recipientEmail: string,
+  employeeName = 'Team Specialist'
+): Promise<EmailDispatchRecord | null> {
+  try {
+    const res = await fetch(`${PYTHON_API_BASE_URL}/api/notifications/test-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient_email: recipientEmail,
+        employee_name: employeeName,
+        custom_note: 'Direct live test dispatch from Nexus Command Center'
+      }),
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn('[Python API] Test email dispatch failed:', err);
+    return null;
   }
 }
 

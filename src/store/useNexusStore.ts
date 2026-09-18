@@ -110,6 +110,8 @@ export interface NexusState {
   // Real-time CRUD actions against Supabase
   addEmployee: (emp: Partial<Employee>) => Promise<void>;
   addTask: (task: Partial<Task>) => Promise<void>;
+  assignTask: (taskId: string, employeeId: string, customNote?: string) => Promise<boolean>;
+  resendTaskEmail: (taskId: string) => Promise<boolean>;
   deleteEmployee: (id: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   clearAllData: () => Promise<void>;
@@ -425,8 +427,32 @@ export const useNexusStore = create<NexusState>((set, get) => ({
 
           if (eventType === 'INSERT') {
             updatedTasks = [newRecord, ...tasks.filter(t => t.id !== newRecord.id)];
+            if (newRecord?.assigned_employee_id) {
+              const assignedEmp = employees.find(e => e.id === newRecord.assigned_employee_id);
+              if (assignedEmp) {
+                sendAssignmentEmail(newRecord, assignedEmp, undefined, 'Real-time System Task Insertion').then(record => {
+                  if (record) {
+                    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+                      message: `📧 Direct dispatch email sent to ${assignedEmp.name} (${record.recipient_email}) via SMTP.`
+                    });
+                  }
+                }).catch(err => console.warn('Email dispatch on insert notice:', err));
+              }
+            }
           } else if (eventType === 'UPDATE') {
             updatedTasks = tasks.map(t => t.id === newRecord.id ? newRecord : t);
+            if (newRecord?.assigned_employee_id && newRecord.assigned_employee_id !== oldRecord?.assigned_employee_id) {
+              const assignedEmp = employees.find(e => e.id === newRecord.assigned_employee_id);
+              if (assignedEmp) {
+                sendAssignmentEmail(newRecord, assignedEmp, undefined, 'Real-time Task Allocation Sync').then(record => {
+                  if (record) {
+                    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+                      message: `📧 Direct dispatch email sent to ${assignedEmp.name} (${record.recipient_email}) via SMTP.`
+                    });
+                  }
+                }).catch(err => console.warn('Email dispatch on update notice:', err));
+              }
+            }
           } else if (eventType === 'DELETE') {
             updatedTasks = tasks.filter(t => t.id !== oldRecord.id);
           }
@@ -608,6 +634,126 @@ export const useNexusStore = create<NexusState>((set, get) => ({
       await insertTaskToSupabase(newTask);
     } catch (err) {
       console.warn('Supabase task insert notice:', err);
+    }
+  },
+
+  assignTask: async (taskId: string, employeeId: string, customNote?: string) => {
+    const { tasks, employees, currentUser } = get();
+    const targetTask = tasks.find(t => t.id === taskId);
+    const targetEmp = employees.find(e => e.id === employeeId);
+    if (!targetTask || !targetEmp) return false;
+
+    const prevAssigneeId = targetTask.assigned_employee_id;
+    const prevAssignee = employees.find(e => e.id === prevAssigneeId);
+
+    const updatedTasks = tasks.map(t =>
+      t.id === taskId ? { ...t, assigned_employee_id: employeeId, status: 'InProgress' as const } : t
+    );
+
+    const effortHours = (targetTask.remaining_effort_min || 60) / 60;
+    const updatedEmployees = employees.map(e => {
+      if (e.id === employeeId) {
+        const cur = e.current_tasks.includes(taskId) ? e.current_tasks : [...e.current_tasks, taskId];
+        const addUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+        return {
+          ...e,
+          current_tasks: cur,
+          utilization_pct: Math.min(100, e.utilization_pct + addUtil)
+        };
+      }
+      if (prevAssigneeId && e.id === prevAssigneeId) {
+        const subUtil = Math.round((effortHours / Math.max(1, e.capacity_hours)) * 100);
+        return {
+          ...e,
+          current_tasks: e.current_tasks.filter(tid => tid !== taskId),
+          utilization_pct: Math.max(0, e.utilization_pct - subUtil)
+        };
+      }
+      return e;
+    });
+
+    const newMetrics = computeMetrics(updatedTasks, updatedEmployees);
+    const updatedHistory = appendMetricHistory(newMetrics, updatedEmployees.length, get().recommendations.length, get().metricHistory);
+
+    const audit: AuditLog = {
+      id: `audit-assign-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${currentUser.role} (${currentUser.name})`,
+      event_type: 'MANUAL_OVERRIDE',
+      task_id: targetTask.id,
+      task_code: targetTask.code,
+      before: prevAssignee ? `Assigned to ${prevAssignee.name}` : 'Unassigned',
+      after: `Assigned to ${targetEmp.name} (${targetEmp.email})`,
+      reason: customNote || 'Direct operator allocation via Global Work Order Registry.',
+      approval_outcome: 'AUTO_APPROVED'
+    };
+
+    set(state => ({
+      tasks: updatedTasks,
+      employees: updatedEmployees,
+      metrics: newMetrics,
+      metricHistory: updatedHistory,
+      auditLogs: [audit, ...state.auditLogs]
+    }));
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `Task ${targetTask.code} assigned to ${targetEmp.name}. Dispatching SMTP alert...`
+    });
+
+    // Automated single-recipient dispatch email to the assigned employee
+    const assignedTaskObj = { ...targetTask, assigned_employee_id: employeeId, status: 'InProgress' as const };
+    sendAssignmentEmail(assignedTaskObj, targetEmp, customNote, 'Direct Manager Assignment').then(record => {
+      if (record) {
+        realtimeBus.publish('NOTIFICATION_RECEIVED', {
+          message: `📧 Direct dispatch email sent to ${targetEmp.name} (${record.recipient_email}) via SMTP.`
+        });
+      }
+    }).catch(err => console.warn('Email dispatch on manual assign notice:', err));
+
+    try {
+      await updateTaskInSupabase(taskId, { assigned_employee_id: employeeId, status: 'InProgress' });
+      await insertAuditLogToSupabase(audit);
+    } catch (err) {
+      console.warn('Supabase task assign notice:', err);
+    }
+
+    return true;
+  },
+
+  resendTaskEmail: async (taskId: string) => {
+    const { tasks, employees } = get();
+    const targetTask = tasks.find(t => t.id === taskId);
+    if (!targetTask || !targetTask.assigned_employee_id) return false;
+
+    const targetEmp = employees.find(e => e.id === targetTask.assigned_employee_id);
+    if (!targetEmp) return false;
+
+    realtimeBus.publish('NOTIFICATION_RECEIVED', {
+      message: `Sending assignment email to ${targetEmp.name} (${targetEmp.email})...`
+    });
+
+    const emailResult = await sendAssignmentEmail(
+      targetTask,
+      targetEmp,
+      undefined,
+      'Operator Resend / Direct Notification'
+    );
+
+    if (emailResult && emailResult.status === 'Delivered via SMTP') {
+      realtimeBus.publish('NOTIFICATION_RECEIVED', {
+        message: `📧 Email delivered to ${targetEmp.name} (${emailResult.recipient_email}) via SMTP.`
+      });
+      return true;
+    } else if (emailResult) {
+      realtimeBus.publish('NOTIFICATION_RECEIVED', {
+        message: `ℹ️ Email dispatch recorded: ${emailResult.status} (${emailResult.recipient_email}).`
+      });
+      return true;
+    } else {
+      realtimeBus.publish('NOTIFICATION_RECEIVED', {
+        message: `⚠️ Email dispatch failed. Ensure Python backend is running.`
+      });
+      return false;
     }
   },
 
