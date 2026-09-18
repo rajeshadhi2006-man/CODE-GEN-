@@ -592,12 +592,14 @@ export const useNexusStore = create<NexusState>((set, get) => ({
 
   addTask: async (taskData: Partial<Task>) => {
     const { tasks, employees } = get();
-    const newCode = taskData.code || `T-${(tasks.length + 100).toString()}`;
+    const validProjectId = taskData.project_id || get().projects[0]?.id || 'proj-nexus-core';
+    const newCode = taskData.code || `WO-${Math.floor(100 + Math.random() * 900)}`;
+    const newId = taskData.id || `task-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const newTask: Task = {
-      id: taskData.id || `task-${Date.now()}`,
+      id: newId,
       code: newCode,
       name: taskData.name || 'Urgent Cloud Work Order',
-      project_id: taskData.project_id || (get().projects[0]?.id || 'proj-1'),
+      project_id: validProjectId,
       priority: taskData.priority || 'High',
       business_impact_score: taskData.business_impact_score || 85,
       required_skills: taskData.required_skills || [{ skill_id: 'sk-aws', min_proficiency: 75 }],

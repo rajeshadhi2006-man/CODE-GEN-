@@ -208,19 +208,34 @@ export async function deleteEmployeeFromSupabase(id: string) {
 export async function insertTaskToSupabase(task: Partial<Task>) {
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not configured');
-  return await client.from('tasks').insert(task);
+  const res = await client.from('tasks').insert(task);
+  if (res.error) {
+    console.error('Supabase task insert error:', res.error);
+    throw new Error(res.error.message);
+  }
+  return res.data;
 }
 
 export async function updateTaskInSupabase(id: string, updates: Partial<Task>) {
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not configured');
-  return await client.from('tasks').update(updates).eq('id', id);
+  const res = await client.from('tasks').update(updates).eq('id', id);
+  if (res.error) {
+    console.error('Supabase task update error:', res.error);
+    throw new Error(res.error.message);
+  }
+  return res.data;
 }
 
 export async function deleteTaskFromSupabase(id: string) {
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not configured');
-  return await client.from('tasks').delete().eq('id', id);
+  const res = await client.from('tasks').delete().eq('id', id);
+  if (res.error) {
+    console.error('Supabase task delete error:', res.error);
+    throw new Error(res.error.message);
+  }
+  return res.data;
 }
 
 export async function deleteAllTasksFromSupabase() {

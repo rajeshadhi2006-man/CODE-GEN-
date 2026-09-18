@@ -9,17 +9,20 @@ import { findBestSkillMatch } from '../../../engine/scoring';
 import { Sparkles, Mail, CheckCircle2, UserCheck, ShieldAlert, Cpu } from 'lucide-react';
 
 export const CreateTaskModal: React.FC = () => {
-  const { isCreateTaskModalOpen, toggleCreateTaskModal, addTask, employees } = useNexusStore();
+  const { isCreateTaskModalOpen, toggleCreateTaskModal, addTask, employees, projects } = useNexusStore();
 
   const [name, setName] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('High');
   const [effortMin, setEffortMin] = useState(120);
   const [slaHours, setSlaHours] = useState(4);
   const [selectedSkillId, setSelectedSkillId] = useState('sk-python');
   const [assignedEmpId, setAssignedEmpId] = useState('auto');
   
-  // Real-time talent matching state
+  // Real-time talent matching & submission state
   const [isMatching, setIsMatching] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [topMatch, setTopMatch] = useState<ExpertMatchCandidate | null>(null);
   const [matchMessage, setMatchMessage] = useState<string | null>(null);
 
@@ -61,25 +64,38 @@ export const CreateTaskModal: React.FC = () => {
 
   const selectedEmployee = employees.find(e => e.id === effectiveEmpId);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
-    addTask({
-      name: name.trim(),
-      priority,
-      estimated_effort_min: effortMin,
-      remaining_effort_min: effortMin,
-      sla_deadline: new Date(Date.now() + slaHours * 60 * 60 * 1000).toISOString(),
-      required_skills: [{ skill_id: selectedSkillId, min_proficiency: 75 }],
-      assigned_employee_id: effectiveEmpId || null,
-      business_impact_score: priority === 'Critical' ? 95 : priority === 'High' ? 80 : 60
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
 
-    setName('');
-    setTopMatch(null);
-    setMatchMessage(null);
-    toggleCreateTaskModal(false);
+    const validProjId = selectedProjectId || (projects[0]?.id || 'proj-nexus-core');
+
+    try {
+      await addTask({
+        name: name.trim(),
+        project_id: validProjId,
+        priority,
+        estimated_effort_min: effortMin,
+        remaining_effort_min: effortMin,
+        sla_deadline: new Date(Date.now() + slaHours * 60 * 60 * 1000).toISOString(),
+        required_skills: [{ skill_id: selectedSkillId, min_proficiency: 75 }],
+        assigned_employee_id: effectiveEmpId || null,
+        business_impact_score: priority === 'Critical' ? 95 : priority === 'High' ? 80 : 60
+      });
+
+      setName('');
+      setTopMatch(null);
+      setMatchMessage(null);
+      toggleCreateTaskModal(false);
+    } catch (err: any) {
+      console.error('Task creation failed:', err);
+      setSubmitError(err.message || 'Failed to create work order.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -91,21 +107,33 @@ export const CreateTaskModal: React.FC = () => {
       maxWidth="md"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
-            Task Name / Work Order Summary *
-          </label>
-          <input
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Production Python High-Throughput Ingestion Pipeline"
-            className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white placeholder-[var(--text-tertiary)] focus:outline-none focus:border-[var(--accent)]"
-          />
-        </div>
+        {submitError && (
+          <div className="p-3 rounded-lg bg-red-950/50 border border-red-500/50 text-xs text-red-200 flex items-center gap-2">
+            <ShieldAlert size={14} className="text-red-400 shrink-0" />
+            <span>{submitError}</span>
+          </div>
+        )}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
+              Project Initiative
+            </label>
+            <select
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white focus:outline-none focus:border-[var(--accent)]"
+            >
+              {projects.length > 0 ? (
+                projects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))
+              ) : (
+                <option value="proj-nexus-core">Nexus Workforce Enterprise OS</option>
+              )}
+            </select>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
               Priority Tier
@@ -121,25 +149,39 @@ export const CreateTaskModal: React.FC = () => {
               <option value="Low">Low</option>
             </select>
           </div>
+        </div>
 
-          <div>
-            <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
-              Required Capability
-            </label>
-            <select
-              value={selectedSkillId}
-              onChange={(e) => {
-                setSelectedSkillId(e.target.value);
-                setTopMatch(null);
-                setMatchMessage(null);
-              }}
-              className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white focus:outline-none focus:border-[var(--accent)]"
-            >
-              {SKILLS_LIST.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+        <div>
+          <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
+            Task Name / Work Order Summary *
+          </label>
+          <input
+            type="text"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Production Python High-Throughput Ingestion Pipeline"
+            className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white placeholder-[var(--text-tertiary)] focus:outline-none focus:border-[var(--accent)]"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">
+            Required Capability
+          </label>
+          <select
+            value={selectedSkillId}
+            onChange={(e) => {
+              setSelectedSkillId(e.target.value);
+              setTopMatch(null);
+              setMatchMessage(null);
+            }}
+            className="w-full px-3 py-2 rounded-[8px] bg-[var(--bg-panel)] border border-[var(--hairline)] text-xs text-white focus:outline-none focus:border-[var(--accent)]"
+          >
+            {SKILLS_LIST.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
         </div>
 
         <div className="grid grid-cols-2 gap-3 font-mono-data">
@@ -281,8 +323,8 @@ export const CreateTaskModal: React.FC = () => {
           <Button variant="bordered" size="sm" type="button" onClick={() => toggleCreateTaskModal(false)}>
             Cancel
           </Button>
-          <Button variant="filled" size="sm" type="submit">
-            Create Real Task & Dispatch
+          <Button variant="filled" size="sm" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Creating Work Order...' : 'Create Real Task & Dispatch'}
           </Button>
         </div>
       </form>
