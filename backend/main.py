@@ -108,7 +108,7 @@ async def supabase_assignment_watcher():
                         # Unassigned task detected -> Autonomous AI Auto-Assignment by Skill
                         best_candidate = find_best_skill_candidate(t, emp_list)
                         if best_candidate:
-                            print(f"[Supabase Watcher] 🤖 AI Auto-Assigning unassigned Task {t.code} to specialist {best_candidate.name} based on skills...")
+                            print(f"[Supabase Watcher] [AI-Skill-Matcher] Auto-Assigning unassigned Task {t.code} to specialist {best_candidate.name} based on skills...")
                             client = get_supabase_client()
                             if client:
                                 try:
